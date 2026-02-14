@@ -951,9 +951,7 @@ const App=()=>{
 
   useEffect(()=>{
     if('serviceWorker' in navigator){
-      navigator.serviceWorker.getRegistrations()
-        .then(rs=>Promise.all(rs.map(r=>r.unregister())))
-        .catch(()=>{});
+      navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(()=>{});
     }
   },[]);
 
