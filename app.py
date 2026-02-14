@@ -19,7 +19,7 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-import hashlib, time
+import hashlib, time, hmac, base64
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
@@ -27,10 +27,39 @@ def hash_password(password):
 def verify_password(password, hashed):
     return hash_password(password) == hashed
 
-TOKENS = {}
+SECRET_KEY = os.environ.get("HR_TOKEN_SECRET", "yb579-dev-secret")
+TOKEN_TTL_SECONDS = int(os.environ.get("HR_TOKEN_TTL", 60 * 60 * 24 * 7))
 
-def make_token(username, role):
-    return hashlib.sha256(f"{username}:{role}:{time.time()}".encode()).hexdigest()
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * ((4 - len(data) % 4) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+def make_token(username, role, extra: Optional[dict] = None):
+    payload = {"u": username, "r": role, "iat": int(time.time())}
+    if extra:
+        payload.update(extra)
+    body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    sig = hmac.new(SECRET_KEY.encode(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+def _parse_token(token: str):
+    try:
+        body, sig = token.split(".", 1)
+    except ValueError:
+        raise HTTPException(401, "Unauthorized")
+    expected = hmac.new(SECRET_KEY.encode(), body.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        raise HTTPException(401, "Unauthorized")
+    try:
+        payload = json.loads(_b64url_decode(body).decode())
+    except Exception:
+        raise HTTPException(401, "Unauthorized")
+    if int(time.time()) - int(payload.get("iat", 0)) > TOKEN_TTL_SECONDS:
+        raise HTTPException(401, "Token expired")
+    return payload
 
 def generate_password(length=8):
     """生成随机密码"""
@@ -39,8 +68,24 @@ def generate_password(length=8):
 
 def get_user(request: Request):
     token = request.headers.get("Authorization","").replace("Bearer ","")
-    if token not in TOKENS: raise HTTPException(401, "Unauthorized")
-    return TOKENS[token]
+    if not token:
+        raise HTTPException(401, "Unauthorized")
+    payload = _parse_token(token)
+    username = payload.get("u")
+    if not username:
+        raise HTTPException(401, "Unauthorized")
+    db = database.get_db()
+    u = db.execute("SELECT * FROM users WHERE username=? AND active=1", (username,)).fetchone()
+    if u:
+        db.close()
+        return dict(u)
+    if payload.get("pin"):
+        emp = db.execute("SELECT id,name,primary_wh FROM employees WHERE id=?", (username,)).fetchone()
+        db.close()
+        if emp:
+            return {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"], "warehouse_code": emp["primary_wh"]}
+    db.close()
+    raise HTTPException(401, "Unauthorized")
 
 def q(table, where="1=1", params=(), order="rowid DESC", limit=500):
     db = database.get_db()
@@ -74,7 +119,6 @@ def login(req: LoginReq):
     if not u or not verify_password(req.password, u["password_hash"]):
         raise HTTPException(401, "用户名或密码错误")
     token = make_token(u["username"], u["role"])
-    TOKENS[token] = dict(u)
     return {"token": token, "user": {"username": u["username"], "display_name": u["display_name"], "role": u["role"], "employee_id": u["employee_id"]}}
 
 @app.post("/api/pin-login")
@@ -83,8 +127,7 @@ def pin_login(req: PinReq):
     emp = db.execute("SELECT * FROM employees WHERE pin=?", (req.pin,)).fetchone()
     db.close()
     if not emp: raise HTTPException(401, "PIN无效")
-    token = make_token(emp["id"], "worker")
-    TOKENS[token] = {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"], "warehouse_code": emp["primary_wh"]}
+    token = make_token(emp["id"], "worker", {"pin": 1})
     return {"token": token, "user": {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"]}}
 
 # ── Employees ──
