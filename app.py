@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Optional
 import database
 
-database.init_db(); database.seed_data()
+database.init_db(); database.seed_data(); database.ensure_demo_users(reset_passwords=True)
 
 app = FastAPI(title="渊博579 HR V6")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])

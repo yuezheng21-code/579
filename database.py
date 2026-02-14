@@ -297,6 +297,37 @@ def hash_password(password):
 def verify_password(password, hashed):
     return hash_password(password) == hashed
 
+DEMO_USERS = [
+    ("admin", "admin123", "系统管理员", "admin"),
+    ("hr", "hr123", "赵慧(HR)", "hr"),
+    ("wh_una", "una123", "王磊(UNA)", "wh"),
+    ("wh_dhl", "dhl123", "李娜(DHL)", "wh"),
+    ("finance", "fin123", "孙琳(财务)", "fin"),
+    ("sup001", "sup123", "陈刚(德信)", "sup"),
+    ("mgr579", "579pass", "张伟(579)", "mgr"),
+    ("worker1", "w123", "张三", "worker"),
+]
+
+def ensure_demo_users(reset_passwords: bool = True):
+    """确保测试角色账号存在，便于联调和验收。"""
+    conn = get_db(); c = conn.cursor()
+    for username, password, display_name, role in DEMO_USERS:
+        existing = c.execute("SELECT username FROM users WHERE username=?", (username,)).fetchone()
+        if existing:
+            if reset_passwords:
+                c.execute(
+                    """UPDATE users
+                       SET password_hash=?, display_name=?, role=?, active=1
+                       WHERE username=?""",
+                    (hash_password(password), display_name, role, username),
+                )
+        else:
+            c.execute(
+                "INSERT INTO users(username,password_hash,display_name,role,active) VALUES(?,?,?,?,1)",
+                (username, hash_password(password), display_name, role),
+            )
+    conn.commit(); conn.close()
+
 def seed_data():
     conn = get_db(); c = conn.cursor()
     if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0:
@@ -382,12 +413,7 @@ def seed_data():
             skill_surcharge,min_hours,valid_from,valid_to,adjust_rules) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", q)
 
     # ── Users ──
-    for u in [
-        ("admin","admin123","系统管理员","admin"),("hr","hr123","赵慧(HR)","hr"),
-        ("wh_una","una123","王磊(UNA)","wh"),("wh_dhl","dhl123","李娜(DHL)","wh"),
-        ("finance","fin123","孙琳(财务)","fin"),("sup001","sup123","陈刚(德信)","sup"),
-        ("mgr579","579pass","张伟(579)","mgr"),("worker1","w123","张三","worker"),
-    ]:
+    for u in DEMO_USERS:
         c.execute("INSERT INTO users(username,password_hash,display_name,role) VALUES(?,?,?,?)",
                   (u[0],hash_password(u[1]),u[2],u[3]))
 
