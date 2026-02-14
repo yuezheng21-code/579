@@ -741,22 +741,39 @@ def icon(size: int):
 # ── Static Files & SPA ──
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
+def _frontend_candidates(path: str):
+    base = os.path.dirname(__file__)
+    cwd = os.getcwd()
+    clean = path.lstrip("/")
+    return [
+        os.path.join(STATIC_DIR, clean),
+        os.path.join(base, clean),
+        os.path.join(cwd, clean),
+    ]
+
+def _resolve_frontend_file(path: str):
+    for cand in _frontend_candidates(path):
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+@app.get("/")
+def spa_root():
+    idx = _resolve_frontend_file("index.html")
+    if idx:
+        return FileResponse(idx)
+    return JSONResponse({"msg": "渊博579 HR V6 API running"})
+
 @app.get("/{path:path}")
 def spa(path: str):
-    fp = os.path.join(STATIC_DIR, path)
-    if path and os.path.isfile(fp): return FileResponse(fp)
+    if path:
+        fp = _resolve_frontend_file(path)
+        if fp:
+            return FileResponse(fp)
 
-    # 兼容部署时前端文件位于项目根目录（如 Railway）
-    root_fp = os.path.join(os.path.dirname(__file__), path)
-    if path and os.path.isfile(root_fp):
-        return FileResponse(root_fp)
-
-    idx = os.path.join(STATIC_DIR, "index.html")
-    if os.path.isfile(idx): return FileResponse(idx)
-
-    root_idx = os.path.join(os.path.dirname(__file__), "index.html")
-    if os.path.isfile(root_idx):
-        return FileResponse(root_idx)
+    idx = _resolve_frontend_file("index.html")
+    if idx:
+        return FileResponse(idx)
 
     return JSONResponse({"msg": "渊博579 HR V6 API running"})
 
