@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="/manifest.json">
+<title>渊博579 HR V6</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f172a;--card:#1e293b;--card2:#334155;--border:#475569;--pri:#4f6ef7;--pri2:#6366f1;
+--green:#22c55e;--red:#ef4444;--yellow:#eab308;--orange:#f97316;--cyan:#06b6d4;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--radius:10px;--safe-top:env(safe-area-inset-top,0px);
+--safe-bottom:env(safe-area-inset-bottom,0px)}
+html,body,#root{height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;overflow:hidden}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.fade{animation:fadeIn .25s ease}
+/* Layout */
+.app{display:flex;height:100%;padding-top:var(--safe-top)}
+.sidebar{width:220px;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;flex-shrink:0;transition:transform .3s}
+.sidebar .logo{padding:16px;text-align:center;font-size:18px;font-weight:700;color:var(--pri);border-bottom:1px solid var(--border)}
+.sidebar .logo small{display:block;font-size:11px;color:var(--text2);font-weight:400}
+.nav-item{padding:10px 16px;cursor:pointer;display:flex;align-items:center;gap:8px;color:var(--text2);transition:.15s;font-size:13px;border-left:3px solid transparent}
+.nav-item:hover{background:rgba(79,110,247,.1);color:var(--text)}
+.nav-item.active{background:rgba(79,110,247,.15);color:var(--pri);border-left-color:var(--pri);font-weight:600}
+.nav-group{padding:8px 16px 4px;font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-top:4px}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.header{height:52px;background:var(--card);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:12px;flex-shrink:0}
+.header .menu-btn{display:none;font-size:20px;cursor:pointer;padding:4px}
+.header .title{font-size:16px;font-weight:600;flex:1}
+.header .user-info{display:flex;align-items:center;gap:8px;font-size:13px}
+.header .badge{background:var(--pri);color:#fff;padding:2px 8px;border-radius:10px;font-size:11px}
+.content{flex:1;overflow-y:auto;padding:16px;padding-bottom:calc(16px + var(--safe-bottom))}
+/* Components */
+.card{background:var(--card);border-radius:var(--radius);padding:16px;margin-bottom:12px;border:1px solid var(--border)}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:var(--card);border-radius:var(--radius);padding:14px;border:1px solid var(--border);text-align:center}
+.stat .num{font-size:28px;font-weight:700;color:var(--pri)}
+.stat .label{font-size:12px;color:var(--text2);margin-top:4px}
+.btn{padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;transition:.15s;display:inline-flex;align-items:center;gap:4px}
+.btn-pri{background:var(--pri);color:#fff}.btn-pri:hover{background:var(--pri2)}
+.btn-green{background:var(--green);color:#fff}.btn-red{background:var(--red);color:#fff}
+.btn-ghost{background:transparent;color:var(--text2);border:1px solid var(--border)}.btn-ghost:hover{color:var(--text);border-color:var(--text2)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.table-wrap{overflow-x:auto;margin-top:8px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:var(--card2);padding:8px 10px;text-align:left;font-weight:600;white-space:nowrap;position:sticky;top:0;z-index:1}
+td{padding:7px 10px;border-top:1px solid var(--border);white-space:nowrap}
+tr:hover td{background:rgba(79,110,247,.05)}
+.badge-s{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;display:inline-block}
+.bg-green{background:rgba(34,197,94,.15);color:var(--green)}
+.bg-red{background:rgba(239,68,68,.15);color:var(--red)}
+.bg-yellow{background:rgba(234,179,8,.15);color:var(--yellow)}
+.bg-blue{background:rgba(79,110,247,.15);color:var(--pri)}
+.bg-cyan{background:rgba(6,182,212,.15);color:var(--cyan)}
+.bg-orange{background:rgba(249,115,22,.15);color:var(--orange)}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
+.modal{background:var(--card);border-radius:12px;padding:20px;max-width:600px;width:100%;max-height:85vh;overflow-y:auto;border:1px solid var(--border)}
+.modal h3{margin-bottom:12px;font-size:16px}
+.form-row{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.form-field{flex:1;min-width:140px}
+.form-field label{display:block;font-size:12px;color:var(--text2);margin-bottom:4px}
+.form-field input,.form-field select,.form-field textarea{width:100%;padding:7px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px}
+.form-field textarea{resize:vertical;min-height:60px}
+.tabs{display:flex;gap:2px;margin-bottom:12px;overflow-x:auto}
+.tab{padding:7px 14px;cursor:pointer;border-radius:6px;font-size:13px;color:var(--text2);white-space:nowrap;transition:.15s}
+.tab.active{background:var(--pri);color:#fff}
+.tag{display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;margin:1px}
+.search-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.search-bar input{flex:1;min-width:200px;padding:7px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px}
+.search-bar input:focus{outline:none;border-color:var(--pri)}
+.toast{position:fixed;top:16px;right:16px;padding:10px 20px;border-radius:8px;color:#fff;z-index:200;animation:fadeIn .3s}
+.empty{text-align:center;padding:40px;color:var(--text3)}
+/* Grade chart */
+.grade-bar{display:flex;align-items:center;gap:8px;margin:4px 0}
+.grade-bar .bar{flex:1;height:22px;background:var(--bg);border-radius:4px;overflow:hidden;position:relative}
+.grade-bar .fill{height:100%;border-radius:4px;display:flex;align-items:center;padding:0 6px;font-size:11px;color:#fff;font-weight:600;transition:width .5s}
+/* Info card */
+.info-card{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.info-item{padding:12px;background:var(--bg);border-radius:8px;border:1px solid var(--border)}
+.info-item .label{font-size:11px;color:var(--text3);margin-bottom:4px}
+.info-item .value{font-size:14px;font-weight:600}
+/* Mobile */
+@media(max-width:768px){
+  .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:50;transform:translateX(-100%)}
+  .sidebar.open{transform:translateX(0)}
+  .sidebar-mask{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:49;display:none}
+  .sidebar-mask.show{display:block}
+  .header .menu-btn{display:block}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .content{padding:12px}
+  .form-row{flex-direction:column}
+  .form-field{min-width:100%}
+}
+/* Print */
+@media print{.sidebar,.header{display:none!important}.content{padding:0!important}}
+/* Login Mobile Fix */
+.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;background:var(--bg)}
+.login-card{width:100%;max-width:340px;text-align:center}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback,useMemo,useRef,createContext,useContext} = React;
+
+// ══════ i18n ══════
+const T = {
+  zh:{dashboard:'仪表盘',employees:'花名册',suppliers:'供应商',grades:'职级体系',performance:'绩效考核',
+    quotation:'报价管理',files:'人员档案',leave:'假期管理',expense:'报销审批',
+    timesheet:'工时记录',container:'装卸柜',settlement:'财务结算',schedule:'排班',
+    dispatch:'派遣需求',clock:'打卡',messages:'消息',analytics:'数据分析',admin:'权限管理',
+    login:'登录',logout:'退出',username:'用户名',password:'密码',search:'搜索',add:'新增',
+    edit:'编辑',delete:'删除',export:'导出',approve:'审批',save:'保存',cancel:'取消',
+    name:'姓名',grade:'职级',status:'状态',date:'日期',amount:'金额',total:'合计',
+    pending:'待审批',approved:'已批准',rejected:'已拒绝',all:'全部',
+    mypage:'我的页面',accounts:'账号管理',whsalary:'仓库薪资'},
+  en:{dashboard:'Dashboard',employees:'Employees',suppliers:'Suppliers',grades:'Grade System',performance:'Performance',
+    quotation:'Quotation',files:'Employee Files',leave:'Leave Mgmt',expense:'Expense',
+    timesheet:'Timesheet',container:'Container',settlement:'Settlement',schedule:'Schedule',
+    dispatch:'Dispatch',clock:'Clock',messages:'Messages',analytics:'Analytics',admin:'Admin',
+    login:'Login',logout:'Logout',username:'Username',password:'Password',search:'Search',add:'Add',
+    edit:'Edit',delete:'Delete',export:'Export',approve:'Approve',save:'Save',cancel:'Cancel',
+    name:'Name',grade:'Grade',status:'Status',date:'Date',amount:'Amount',total:'Total',
+    pending:'Pending',approved:'Approved',rejected:'Rejected',all:'All',
+    mypage:'My Page',accounts:'Accounts',whsalary:'WH Salary'},
+  de:{dashboard:'Dashboard',employees:'Mitarbeiter',suppliers:'Lieferanten',grades:'Stufensystem',performance:'Leistung',
+    quotation:'Angebot',files:'Personalakte',leave:'Urlaub',expense:'Spesen',
+    timesheet:'Zeiterfassung',container:'Container',settlement:'Abrechnung',schedule:'Dienstplan',
+    dispatch:'Disposition',clock:'Stempeluhr',messages:'Nachrichten',analytics:'Analyse',admin:'Admin',
+    login:'Anmelden',logout:'Abmelden',username:'Benutzer',password:'Passwort',search:'Suche',add:'Neu',
+    edit:'Bearbeiten',delete:'Löschen',export:'Export',approve:'Genehmigen',save:'Speichern',cancel:'Abbrechen',
+    name:'Name',grade:'Stufe',status:'Status',date:'Datum',amount:'Betrag',total:'Gesamt',
+    pending:'Ausstehend',approved:'Genehmigt',rejected:'Abgelehnt',all:'Alle',
+    mypage:'Meine Seite',accounts:'Konten',whsalary:'Lager Gehalt'}
+};
+const LANGS = [{c:'zh',n:'中文'},{c:'en',n:'English'},{c:'de',n:'Deutsch'}];
+
+// ══════ API Helper ══════
+const API = {
+  token: localStorage.getItem('hr_token') || '',
+  setToken(t){ this.token=t; localStorage.setItem('hr_token',t) },
+  async req(method,url,body){
+    const opt = {method, headers:{'Content-Type':'application/json'}};
+    if(this.token) opt.headers['Authorization'] = 'Bearer '+this.token;
+    if(body) opt.body = JSON.stringify(body);
+    const r = await fetch(url,opt);
+    if(r.status===401){ this.setToken(''); window.location.reload(); return null; }
+    return r.json();
+  },
+  get(u){return this.req('GET',u)}, post(u,b){return this.req('POST',u,b)},
+  put(u,b){return this.req('PUT',u,b)},
+};
+
+// ══════ Toast ══════
+let toastTimer;
+function showToast(msg,type='success'){
+  const el=document.getElementById('toast');
+  if(!el)return;
+  el.textContent=msg; el.style.display='block';
+  el.style.background=type==='success'?'var(--green)':'var(--red)';
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.style.display='none',2500);
+}
+
+// ══════ Status Badge ══════
+const SBadge=({s})=>{
+  const m={'在职':'bg-green','离职':'bg-red','已入账':'bg-green','已批准':'bg-green',
+    '待仓库审批':'bg-yellow','待财务确认':'bg-orange','待审批':'bg-yellow','已提交':'bg-blue',
+    '已拒绝':'bg-red','待审核':'bg-yellow','已通过':'bg-green','已接受':'bg-green',
+    '待回复':'bg-cyan','已完成':'bg-green','生效中':'bg-green','已确认':'bg-green',
+    '招聘中':'bg-orange','待处理':'bg-yellow','合作中':'bg-green','已付款':'bg-green',
+    '已生成':'bg-green','未生成':'bg-yellow'};
+  return React.createElement('span',{className:`badge-s ${m[s]||'bg-blue'}`},s);
+};
+
+// ══════ Grade Color ══════
+const gradeColor=(g)=>{
+  const c={'P0':'#94a3b8','P1':'#38bdf8','P2':'#22d3ee','P3':'#34d399','P4':'#a78bfa','P5':'#f472b6',
+    'P6':'#fb923c','P7':'#fbbf24','P8':'#ef4444','P9':'#dc2626',
+    'M1':'#7dd3fc','M2':'#67e8f9','M3':'#86efac','M4':'#c4b5fd','M5':'#f9a8d4'};
+  return c[g]||'var(--pri)';
+};
+
+// ══════ Login Page (Optimized - No default credentials shown) ══════
+const LoginPage=({onLogin,lang,setLang})=>{
+  const [u,setU]=useState('');const[p,setP]=useState('');const[err,setErr]=useState('');const[loading,setLoading]=useState(false);
+  const t=T[lang];
+  const submit=async()=>{
+    if(!u||!p){setErr('请输入用户名和密码');return;}
+    setLoading(true);setErr('');
+    const r=await API.post('/api/login',{username:u,password:p});
+    setLoading(false);
+    if(!r||r.detail){setErr(r?.detail||'登录失败');return;}
+    API.setToken(r.token); onLogin(r.user);
+  };
+  return React.createElement('div',{className:'login-page'},
+    React.createElement('div',{className:'card fade login-card'},
+      React.createElement('div',{style:{fontSize:28,fontWeight:700,color:'var(--pri)',marginBottom:4}},'渊博579'),
+      React.createElement('div',{style:{fontSize:13,color:'var(--text2)',marginBottom:20}},'HR Management System V6'),
+      React.createElement('div',{style:{display:'flex',justifyContent:'center',gap:6,marginBottom:16}},
+        LANGS.map(l=>React.createElement('span',{key:l.c,onClick:()=>setLang(l.c),
+          style:{cursor:'pointer',padding:'3px 8px',borderRadius:4,fontSize:12,
+            background:lang===l.c?'var(--pri)':'var(--card2)',color:lang===l.c?'#fff':'var(--text2)'}},l.n))),
+      err&&React.createElement('div',{style:{color:'var(--red)',fontSize:13,marginBottom:8}},err),
+      React.createElement('input',{value:u,onChange:e=>setU(e.target.value),placeholder:t.username,
+        style:{width:'100%',padding:'10px 12px',marginBottom:8,background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:14}}),
+      React.createElement('input',{type:'password',value:p,onChange:e=>setP(e.target.value),placeholder:t.password,
+        onKeyDown:e=>e.key==='Enter'&&submit(),
+        style:{width:'100%',padding:'10px 12px',marginBottom:16,background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:14}}),
+      React.createElement('button',{className:'btn btn-pri',onClick:submit,disabled:loading,style:{width:'100%',padding:10,fontSize:15}},
+        loading?'登录中...':t.login),
+      React.createElement('div',{style:{marginTop:16,fontSize:11,color:'var(--text3)'}},'请联系管理员获取账号')
+    ));
+};
+
+// ══════ Dashboard ══════
+const DashPage=({t})=>{
+  const[d,setD]=useState(null);
+  useEffect(()=>{API.get('/api/analytics/dashboard').then(setD)},[]);
+  if(!d)return React.createElement('div',{className:'empty'},'加载中...');
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'stats'},
+      [{n:d.total_emp,l:'在职员工',c:'var(--pri)'},{n:d.own,l:'自有员工',c:'var(--green)'},
+       {n:d.supplier,l:'供应商员工',c:'var(--orange)'},{n:d.wh_count,l:'仓库数',c:'var(--cyan)'},
+       {n:d.pending_ts,l:'待审工时',c:'var(--yellow)'},{n:d.pending_leave,l:'待审假条',c:'var(--red)'},
+       {n:d.pending_expense,l:'待审报销',c:'var(--orange)'},{n:Math.round(d.monthly_hrs),l:'本月总工时',c:'var(--pri2)'}
+      ].map((s,i)=>React.createElement('div',{key:i,className:'stat'},
+        React.createElement('div',{className:'num',style:{color:s.c}},s.n),
+        React.createElement('div',{className:'label'},s.l)))),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
+      React.createElement('div',{className:'card'},
+        React.createElement('h4',{style:{marginBottom:10}},'职级分布'),
+        d.grade_dist.map(g=>React.createElement('div',{key:g.grade,className:'grade-bar'},
+          React.createElement('span',{style:{width:28,fontWeight:600,color:gradeColor(g.grade)}},g.grade),
+          React.createElement('div',{className:'bar'},
+            React.createElement('div',{className:'fill',style:{width:`${Math.min(g.c/d.total_emp*100,100)*3}%`,background:gradeColor(g.grade)}},g.c))))),
+      React.createElement('div',{className:'card'},
+        React.createElement('h4',{style:{marginBottom:10}},'仓库人员'),
+        d.wh_dist.map(w=>React.createElement('div',{key:w.w,className:'grade-bar'},
+          React.createElement('span',{style:{width:40,fontWeight:600}},w.w||'-'),
+          React.createElement('div',{className:'bar'},
+            React.createElement('div',{className:'fill',style:{width:`${Math.min(w.c/d.total_emp*100,100)*3}%`,background:'var(--pri)'}},w.c)))))));
+};
+
+// ══════ My Page (Employee Personal Page) ══════
+const MyPage=({t,user})=>{
+  const[data,setData]=useState(null);const[salaryConfig,setSalaryConfig]=useState([]);
+  const[tab,setTab]=useState('info');
+  useEffect(()=>{
+    API.get('/api/mypage').then(setData);
+    API.get('/api/mypage/salary-config').then(r=>setSalaryConfig(r?.configs||[]));
+  },[]);
+  if(!data)return React.createElement('div',{className:'empty'},'加载中...');
+  const emp=data.employee;
+  const leaveMap={annual:'年假',sick:'病假',personal:'事假'};
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'card',style:{textAlign:'center',paddingBottom:20}},
+      React.createElement('div',{style:{width:80,height:80,borderRadius:'50%',background:'var(--pri)',margin:'0 auto 12px',
+        display:'flex',alignItems:'center',justifyContent:'center',fontSize:32,color:'#fff'}},emp.name?.charAt(0)),
+      React.createElement('div',{style:{fontSize:20,fontWeight:700}},emp.name),
+      React.createElement('div',{style:{color:'var(--text2)',marginTop:4}},emp.id,' · ',
+        React.createElement('span',{style:{color:gradeColor(emp.grade),fontWeight:600}},emp.grade)),
+      React.createElement('div',{style:{marginTop:8}},
+        React.createElement(SBadge,{s:emp.status}),' ',
+        React.createElement('span',{className:'badge-s bg-blue'},emp.primary_wh))),
+    React.createElement('div',{className:'tabs'},
+      [['info','基本信息'],['salary','薪资配置'],['timesheet','工时记录'],['leave','假期余额']].map(([k,l])=>
+        React.createElement('div',{key:k,className:`tab ${tab===k?'active':''}`,onClick:()=>setTab(k)},l))),
+    tab==='info'&&React.createElement('div',{className:'card'},
+      React.createElement('div',{className:'info-card'},
+        [{l:'工号',v:emp.id},{l:'姓名',v:emp.name},{l:'职级',v:emp.grade},{l:'岗位',v:emp.position},
+         {l:'主仓库',v:emp.primary_wh},{l:'派遣仓库',v:emp.dispatch_whs||'-'},{l:'来源',v:emp.source},
+         {l:'入职日期',v:emp.join_date},{l:'电话',v:emp.phone||'-'},{l:'邮箱',v:emp.email||'-'},
+         {l:'国籍',v:emp.nationality},{l:'语言',v:emp.languages||'-'}
+        ].map((it,i)=>React.createElement('div',{key:i,className:'info-item'},
+          React.createElement('div',{className:'label'},it.l),
+          React.createElement('div',{className:'value'},it.v))))),
+    tab==='salary'&&React.createElement('div',null,
+      React.createElement('div',{className:'stats',style:{marginBottom:12}},
+        [{n:`€${data.monthly_stats?.pay?.toFixed(2)||0}`,l:'本月应发',c:'var(--green)'},
+         {n:`€${data.monthly_stats?.net?.toFixed(2)||0}`,l:'本月实发',c:'var(--pri)'},
+         {n:`${data.monthly_stats?.hours?.toFixed(1)||0}h`,l:'本月工时',c:'var(--cyan)'}
+        ].map((s,i)=>React.createElement('div',{key:i,className:'stat'},
+          React.createElement('div',{className:'num',style:{color:s.c}},s.n),
+          React.createElement('div',{className:'label'},s.l)))),
+      React.createElement('div',{className:'card'},
+        React.createElement('h4',{style:{marginBottom:12}},'各仓库薪资配置'),
+        salaryConfig.length===0?React.createElement('div',{className:'empty'},'暂无配置'):
+        React.createElement('div',{className:'table-wrap'},
+          React.createElement('table',null,
+            React.createElement('thead',null,React.createElement('tr',null,
+              ['仓库','岗位','时薪','20GP','40GP','45HC','夜班%','周末%','绩效基数'].map(h=>React.createElement('th',{key:h},h)))),
+            React.createElement('tbody',null,salaryConfig.map((c,i)=>React.createElement('tr',{key:i},
+              React.createElement('td',null,c.warehouse_name||c.warehouse_code),
+              React.createElement('td',null,c.position_type),
+              React.createElement('td',{style:{color:'var(--green)',fontWeight:700}},`€${c.hourly_rate}`),
+              React.createElement('td',null,c.container_rate_20gp?`€${c.container_rate_20gp}`:'-'),
+              React.createElement('td',null,c.container_rate_40gp?`€${c.container_rate_40gp}`:'-'),
+              React.createElement('td',null,c.container_rate_45hc?`€${c.container_rate_45hc}`:'-'),
+              React.createElement('td',null,`+${c.night_bonus_pct}%`),
+              React.createElement('td',null,`+${c.weekend_bonus_pct}%`),
+              React.createElement('td',null,`€${c.perf_base}`)))))))),
+    tab==='timesheet'&&React.createElement('div',{className:'card'},
+      React.createElement('h4',{style:{marginBottom:12}},'最近工时记录'),
+      React.createElement('div',{className:'table-wrap'},
+        React.createElement('table',null,
+          React.createElement('thead',null,React.createElement('tr',null,
+            ['日期','仓库','时段','工时','应发','实发','状态'].map(h=>React.createElement('th',{key:h},h)))),
+          React.createElement('tbody',null,data.recent_timesheet.map((r,i)=>React.createElement('tr',{key:i},
+            React.createElement('td',null,r.work_date),React.createElement('td',null,r.warehouse_code),
+            React.createElement('td',null,`${r.start_time}-${r.end_time}`),
+            React.createElement('td',{style:{fontWeight:600}},r.hours+'h'),
+            React.createElement('td',{style:{color:'var(--green)'}},`€${r.hourly_pay}`),
+            React.createElement('td',{style:{fontWeight:600}},`€${r.net_pay}`),
+            React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status})))))))),
+    tab==='leave'&&React.createElement('div',{className:'card'},
+      React.createElement('h4',{style:{marginBottom:12}},'2026年假期余额'),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:12}},
+        data.leave_balances.map((lb,i)=>React.createElement('div',{key:i,style:{background:'var(--bg)',padding:16,borderRadius:8,textAlign:'center'}},
+          React.createElement('div',{style:{fontSize:13,color:'var(--text2)',marginBottom:8}},leaveMap[lb.leave_type]||lb.leave_type),
+          React.createElement('div',{style:{fontSize:24,fontWeight:700,color:'var(--green)'}},lb.remaining_days),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text3)'}},`已用 ${lb.used_days} / 共 ${lb.total_days} 天`))))));
+};
+
+// ══════ Account Management ══════
+const AccountPage=({t})=>{
+  const[accounts,setAccounts]=useState([]);const[selIds,setSelIds]=useState([]);const[showModal,setShowModal]=useState(null);
+  const load=()=>API.get('/api/accounts').then(setAccounts);
+  useEffect(()=>{load()},[]);
+  const generateSingle=async(eid)=>{
+    const r=await API.post('/api/accounts/generate',{employee_id:eid,role:'worker'});
+    if(r?.ok){
+      showToast(`账号已生成: ${r.username} / ${r.password}`);
+      setShowModal({type:'result',data:[{...r}]});
+      load();
+    }else showToast('生成失败','error');
+  };
+  const generateBatch=async()=>{
+    const ids=accounts.filter(a=>!a.has_account&&selIds.includes(a.id)).map(a=>a.id);
+    if(!ids.length){showToast('请选择未生成账号的员工','error');return;}
+    const r=await API.post('/api/accounts/batch-generate',{employee_ids:ids,role:'worker'});
+    if(r?.ok){
+      showToast(`已生成 ${r.accounts.length} 个账号`);
+      setShowModal({type:'result',data:r.accounts});
+      setSelIds([]);load();
+    }else showToast('批量生成失败','error');
+  };
+  const resetPwd=async(username)=>{
+    const r=await API.post('/api/accounts/reset-password',{username});
+    if(r?.ok){
+      showToast(`新密码: ${r.password}`);
+      setShowModal({type:'result',data:[{username,password:r.password,name:''}]});
+    }else showToast('重置失败','error');
+  };
+  const toggleAll=(e)=>{
+    if(e.target.checked)setSelIds(accounts.map(a=>a.id));
+    else setSelIds([]);
+  };
+  const toggleOne=(id)=>{
+    if(selIds.includes(id))setSelIds(selIds.filter(i=>i!==id));
+    else setSelIds([...selIds,id]);
+  };
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{style:{display:'flex',gap:8,marginBottom:12}},
+      React.createElement('button',{className:'btn btn-pri',onClick:generateBatch},'批量生成账号'),
+      React.createElement('span',{style:{color:'var(--text2)',fontSize:13,lineHeight:'32px'}},`已选 ${selIds.length} 人`)),
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          React.createElement('th',null,React.createElement('input',{type:'checkbox',onChange:toggleAll,checked:selIds.length===accounts.length&&accounts.length>0})),
+          ['工号','姓名','职级','仓库','状态','账号','操作'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,accounts.map(a=>React.createElement('tr',{key:a.id},
+          React.createElement('td',null,React.createElement('input',{type:'checkbox',checked:selIds.includes(a.id),onChange:()=>toggleOne(a.id)})),
+          React.createElement('td',null,a.id),React.createElement('td',null,a.name),
+          React.createElement('td',{style:{color:gradeColor(a.grade),fontWeight:600}},a.grade),
+          React.createElement('td',null,a.primary_wh),
+          React.createElement('td',null,React.createElement(SBadge,{s:a.status})),
+          React.createElement('td',null,a.has_account?
+            React.createElement('span',{style:{color:'var(--green)'}},a.username):
+            React.createElement('span',{style:{color:'var(--text3)'}},'未生成')),
+          React.createElement('td',null,
+            !a.has_account?React.createElement('button',{className:'btn btn-sm btn-pri',onClick:()=>generateSingle(a.id)},'生成'):
+            React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>resetPwd(a.username)},'重置密码'))))))),
+    showModal&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowModal(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,'账号信息'),
+        React.createElement('div',{style:{background:'var(--bg)',padding:12,borderRadius:8,marginBottom:12}},
+          showModal.data.map((acc,i)=>React.createElement('div',{key:i,style:{marginBottom:8,padding:8,background:'var(--card2)',borderRadius:6}},
+            React.createElement('div',null,React.createElement('b',null,acc.name||acc.username)),
+            React.createElement('div',{style:{fontSize:13,color:'var(--text2)'}},'用户名: ',React.createElement('span',{style:{color:'var(--pri)'}},acc.username)),
+            React.createElement('div',{style:{fontSize:13,color:'var(--text2)'}},'密码: ',React.createElement('span',{style:{color:'var(--green)'}},acc.password))))),
+        React.createElement('div',{style:{color:'var(--yellow)',fontSize:12,marginBottom:12}},'⚠️ 请妥善保存密码，关闭后无法再次查看'),
+        React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowModal(null)},'确定'))));
+};
+
+// ══════ Warehouse Salary Config ══════
+const WHSalaryPage=({t})=>{
+  const[configs,setConfigs]=useState([]);const[whs,setWhs]=useState([]);const[selWh,setSelWh]=useState('');
+  const[showEdit,setShowEdit]=useState(null);
+  useEffect(()=>{
+    API.get('/api/warehouses').then(setWhs);
+    API.get('/api/warehouse-salary-config').then(setConfigs);
+  },[]);
+  const filtered=selWh?configs.filter(c=>c.warehouse_code===selWh):configs;
+  const save=async()=>{
+    if(showEdit.id){
+      await API.put(`/api/warehouse-salary-config/${showEdit.id}`,showEdit);
+    }else{
+      await API.post('/api/warehouse-salary-config',showEdit);
+    }
+    showToast('保存成功');setShowEdit(null);
+    API.get('/api/warehouse-salary-config').then(setConfigs);
+  };
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar'},
+      React.createElement('select',{value:selWh,onChange:e=>setSelWh(e.target.value),
+        style:{padding:'7px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)'}},
+        React.createElement('option',{value:''},'全部仓库'),
+        whs.map(w=>React.createElement('option',{key:w.code,value:w.code},`${w.code} - ${w.name}`))),
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({warehouse_code:'',grade:'',position_type:'库内',hourly_rate:0,
+        container_rate_20gp:0,container_rate_40gp:0,container_rate_45hc:0,night_bonus_pct:25,weekend_bonus_pct:50,holiday_bonus_pct:100,
+        perf_base:0,perf_excellent_bonus:0,perf_good_bonus:0,settle_method:'按小时'})},'新增配置')),
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['仓库','职级','岗位','时薪','20GP','40GP','45HC','夜班%','周末%','节假%','绩效基数','操作'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,filtered.map(c=>React.createElement('tr',{key:c.id},
+          React.createElement('td',null,c.warehouse_code),
+          React.createElement('td',{style:{color:gradeColor(c.grade),fontWeight:600}},c.grade),
+          React.createElement('td',null,c.position_type),
+          React.createElement('td',{style:{color:'var(--green)',fontWeight:700}},`€${c.hourly_rate}`),
+          React.createElement('td',null,c.container_rate_20gp?`€${c.container_rate_20gp}`:'-'),
+          React.createElement('td',null,c.container_rate_40gp?`€${c.container_rate_40gp}`:'-'),
+          React.createElement('td',null,c.container_rate_45hc?`€${c.container_rate_45hc}`:'-'),
+          React.createElement('td',null,`+${c.night_bonus_pct}%`),
+          React.createElement('td',null,`+${c.weekend_bonus_pct}%`),
+          React.createElement('td',null,`+${c.holiday_bonus_pct}%`),
+          React.createElement('td',null,`€${c.perf_base}`),
+          React.createElement('td',null,React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(c)},'编辑'))))))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit.id?'编辑薪资配置':'新增薪资配置'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},
+            React.createElement('label',null,'仓库'),
+            React.createElement('select',{value:showEdit.warehouse_code,onChange:e=>setShowEdit({...showEdit,warehouse_code:e.target.value}),disabled:!!showEdit.id},
+              React.createElement('option',{value:''},'选择仓库'),
+              whs.map(w=>React.createElement('option',{key:w.code,value:w.code},w.code)))),
+          React.createElement('div',{className:'form-field'},
+            React.createElement('label',null,'职级'),
+            React.createElement('select',{value:showEdit.grade,onChange:e=>setShowEdit({...showEdit,grade:e.target.value}),disabled:!!showEdit.id},
+              React.createElement('option',{value:''},'选择职级'),
+              ['P0','P1','P2','P3','P4','P5','P6','P7','M1','M2','M3'].map(g=>React.createElement('option',{key:g,value:g},g)))),
+          React.createElement('div',{className:'form-field'},
+            React.createElement('label',null,'岗位类型'),
+            React.createElement('select',{value:showEdit.position_type,onChange:e=>setShowEdit({...showEdit,position_type:e.target.value}),disabled:!!showEdit.id},
+              ['库内','装卸','管理'].map(p=>React.createElement('option',{key:p,value:p},p))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'时薪(€)'),
+            React.createElement('input',{type:'number',step:'0.5',value:showEdit.hourly_rate,onChange:e=>setShowEdit({...showEdit,hourly_rate:parseFloat(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'结算方式'),
+            React.createElement('select',{value:showEdit.settle_method,onChange:e=>setShowEdit({...showEdit,settle_method:e.target.value})},
+              ['按小时','按柜','按件'].map(m=>React.createElement('option',{key:m,value:m},m))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'20GP柜(€)'),
+            React.createElement('input',{type:'number',value:showEdit.container_rate_20gp,onChange:e=>setShowEdit({...showEdit,container_rate_20gp:parseFloat(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'40GP柜(€)'),
+            React.createElement('input',{type:'number',value:showEdit.container_rate_40gp,onChange:e=>setShowEdit({...showEdit,container_rate_40gp:parseFloat(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'45HC柜(€)'),
+            React.createElement('input',{type:'number',value:showEdit.container_rate_45hc,onChange:e=>setShowEdit({...showEdit,container_rate_45hc:parseFloat(e.target.value)||0})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'夜班加成%'),
+            React.createElement('input',{type:'number',value:showEdit.night_bonus_pct,onChange:e=>setShowEdit({...showEdit,night_bonus_pct:parseFloat(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'周末加成%'),
+            React.createElement('input',{type:'number',value:showEdit.weekend_bonus_pct,onChange:e=>setShowEdit({...showEdit,weekend_bonus_pct:parseFloat(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'节假日加成%'),
+            React.createElement('input',{type:'number',value:showEdit.holiday_bonus_pct,onChange:e=>setShowEdit({...showEdit,holiday_bonus_pct:parseFloat(e.target.value)||0})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'绩效基数(€)'),
+            React.createElement('input',{type:'number',value:showEdit.perf_base,onChange:e=>setShowEdit({...showEdit,perf_base:parseFloat(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'优秀奖金(€)'),
+            React.createElement('input',{type:'number',value:showEdit.perf_excellent_bonus,onChange:e=>setShowEdit({...showEdit,perf_excellent_bonus:parseFloat(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'良好奖金(€)'),
+            React.createElement('input',{type:'number',value:showEdit.perf_good_bonus,onChange:e=>setShowEdit({...showEdit,perf_good_bonus:parseFloat(e.target.value)||0})}))),
+        React.createElement('div',{style:{display:'flex',gap:8,marginTop:16}},
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存'),
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消')))));
+};
+
+// ══════ Employees ══════
+const EmpPage=({t})=>{
+  const[emps,setEmps]=useState([]);const[q,setQ]=useState('');
+  useEffect(()=>{API.get('/api/employees').then(setEmps)},[]);
+  const filtered=emps.filter(e=>`${e.name}${e.id}${e.grade}${e.primary_wh}`.includes(q));
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar'},
+      React.createElement('input',{value:q,onChange:e=>setQ(e.target.value),placeholder:'🔍 搜索姓名/工号/职级...'})),
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['工号','姓名','职级','岗位','仓库','来源','状态','账号'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,filtered.map(e=>React.createElement('tr',{key:e.id},
+          React.createElement('td',null,e.id),
+          React.createElement('td',null,React.createElement('b',null,e.name)),
+          React.createElement('td',{style:{color:gradeColor(e.grade),fontWeight:700}},e.grade),
+          React.createElement('td',null,e.position),
+          React.createElement('td',null,e.primary_wh),
+          React.createElement('td',null,React.createElement(SBadge,{s:e.source==='自有'?'自有':'供应商'})),
+          React.createElement('td',null,React.createElement(SBadge,{s:e.status})),
+          React.createElement('td',null,React.createElement(SBadge,{s:e.has_account?'已生成':'未生成'}))))))));
+};
+
+// ══════ Grades ══════
+const GradePage=({t})=>{
+  const[grades,setGrades]=useState([]);const[sel,setSel]=useState(null);const[tab,setTab]=useState('运营');
+  useEffect(()=>{API.get('/api/grades').then(setGrades)},[]);
+  const filtered=grades.filter(g=>g.series===tab);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'tabs'},
+      ['运营','行政'].map(s=>React.createElement('div',{key:s,className:`tab ${tab===s?'active':''}`,onClick:()=>setTab(s)},
+        s==='运营'?'运营序列 P0-P9':'行政序列 M1-M5'))),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:12}},
+      filtered.map(g=>{
+        let criteria=[];try{criteria=JSON.parse(g.eval_criteria||'[]')}catch{}
+        let perf=[];try{perf=JSON.parse(g.perf_dimensions||'[]')}catch{}
+        return React.createElement('div',{key:g.code,className:'card',style:{cursor:'pointer',borderColor:sel===g.code?'var(--pri)':'var(--border)'},
+          onClick:()=>setSel(sel===g.code?null:g.code)},
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+            React.createElement('div',null,
+              React.createElement('span',{style:{fontSize:22,fontWeight:700,color:gradeColor(g.code),marginRight:8}},g.code),
+              React.createElement('span',{style:{fontSize:15,fontWeight:600}},g.title_zh)),
+            React.createElement('div',{style:{textAlign:'right',fontSize:12}},
+              React.createElement('div',{style:{color:'var(--green)',fontWeight:700,fontSize:16}},`€${g.base_salary}/h`),
+              React.createElement('div',{style:{color:'var(--text3)'}},g.title_de))),
+          React.createElement('div',{style:{fontSize:12,color:'var(--text2)',marginBottom:6}},
+            `管理幅度: ${g.manage_scope} | 调价: ${g.adjust_pct_min}%~${g.adjust_pct_max}%`),
+          React.createElement('div',{style:{fontSize:12,color:'var(--cyan)'}},`晋升通道: → ${g.promotion_path||'最高级'}`),
+          sel===g.code&&React.createElement('div',{style:{marginTop:10,borderTop:'1px solid var(--border)',paddingTop:10}},
+            React.createElement('div',{style:{fontWeight:600,marginBottom:6,fontSize:13}},'📋 评定标准:'),
+            criteria.map((c,i)=>React.createElement('div',{key:i,style:{fontSize:12,color:'var(--text2)',padding:'2px 0'}},'✅ '+c)),
+            perf.length>0&&React.createElement('div',{style:{marginTop:8}},
+              React.createElement('div',{style:{fontWeight:600,marginBottom:4,fontSize:13}},'📊 绩效维度:'),
+              perf.map((p,i)=>React.createElement('div',{key:i,className:'grade-bar'},
+                React.createElement('span',{style:{width:60,fontSize:12}},p.dim),
+                React.createElement('div',{className:'bar'},
+                  React.createElement('div',{className:'fill',style:{width:`${p.w||p.weight||0}%`,background:'var(--pri)'}},`${p.w||p.weight||0}%`)))))));})));
+};
+
+// ══════ Timesheet ══════
+const TSPage=({t})=>{
+  const[ts,setTs]=useState([]);
+  useEffect(()=>{API.get('/api/timesheet').then(setTs)},[]);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{style:{marginBottom:8,color:'var(--text2)',fontSize:13}},`共 ${ts.length} 条记录`),
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['日期','员工','职级','仓库','岗位','时段','工时','时薪','应付','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,ts.slice(0,100).map(r=>React.createElement('tr',{key:r.id},
+          React.createElement('td',null,r.work_date),React.createElement('td',null,r.employee_name),
+          React.createElement('td',{style:{color:gradeColor(r.grade),fontWeight:700}},r.grade),
+          React.createElement('td',null,r.warehouse_code),
+          React.createElement('td',null,r.position),
+          React.createElement('td',null,`${r.start_time}-${r.end_time}`),
+          React.createElement('td',{style:{fontWeight:700}},r.hours+'h'),
+          React.createElement('td',null,`€${r.base_rate}`),
+          React.createElement('td',{style:{color:'var(--green)',fontWeight:700}},`€${r.hourly_pay}`),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status}))))))));
+};
+
+// ══════ Settlement ══════
+const SettPage=({t})=>{
+  const[own,setOwn]=useState([]);const[sup,setSup]=useState([]);const[tab,setTab]=useState('own');
+  useEffect(()=>{API.get('/api/settlement?mode=own').then(setOwn);API.get('/api/settlement?mode=supplier').then(setSup);},[]);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'tabs'},
+      [['own','自有员工'],['sup','供应商结算']].map(([k,l])=>React.createElement('div',{key:k,className:`tab ${tab===k?'active':''}`,onClick:()=>setTab(k)},l))),
+    tab==='own'?React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['工号','姓名','职级','仓库','工时','应付','社保','税','实发'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,own.map(r=>React.createElement('tr',{key:r.employee_id},
+          React.createElement('td',null,r.employee_id),React.createElement('td',null,r.employee_name),
+          React.createElement('td',{style:{color:gradeColor(r.grade),fontWeight:700}},r.grade),
+          React.createElement('td',null,r.warehouse_code),
+          React.createElement('td',null,r.h+'h'),React.createElement('td',null,`€${r.pay?.toFixed(2)}`),
+          React.createElement('td',null,`-€${r.ssi?.toFixed(2)}`),React.createElement('td',null,`-€${r.tax?.toFixed(2)}`),
+          React.createElement('td',{style:{fontWeight:700,color:'var(--green)'}},`€${r.net?.toFixed(2)}`))))))
+    :React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['供应商','仓库','人数','总工时','总费用'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,sup.map((r,i)=>React.createElement('tr',{key:i},
+          React.createElement('td',null,r.supplier_id),React.createElement('td',null,r.warehouse_code),
+          React.createElement('td',null,r.hc),React.createElement('td',null,r.h+'h'),
+          React.createElement('td',{style:{fontWeight:700}},`€${r.pay?.toFixed(2)}`)))))));
+};
+
+// ══════ Leave ══════
+const LeavePage=({t})=>{
+  const[reqs,setReqs]=useState([]);const[types,setTypes]=useState([]);const[tab,setTab]=useState('req');
+  useEffect(()=>{API.get('/api/leave-requests').then(setReqs);API.get('/api/leave-types').then(setTypes);},[]);
+  const typeMap=Object.fromEntries(types.map(t=>[t.code,t.name_zh]));
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'tabs'},
+      [['req','假条记录'],['type','假期类型']].map(([k,l])=>React.createElement('div',{key:k,className:`tab ${tab===k?'active':''}`,onClick:()=>setTab(k)},l))),
+    tab==='req'?React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['申请号','员工','职级','类型','开始','结束','天数','原因','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,reqs.map(r=>React.createElement('tr',{key:r.id},
+          React.createElement('td',null,r.id),React.createElement('td',null,r.employee_name),
+          React.createElement('td',{style:{color:gradeColor(r.grade),fontWeight:700}},r.grade),
+          React.createElement('td',null,typeMap[r.leave_type]||r.leave_type),
+          React.createElement('td',null,r.start_date),React.createElement('td',null,r.end_date),
+          React.createElement('td',{style:{fontWeight:700}},r.days),
+          React.createElement('td',null,r.reason),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.status})))))))
+    :React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(250px,1fr))',gap:12}},
+      types.map(lt=>React.createElement('div',{key:lt.code,className:'card'},
+        React.createElement('div',{style:{fontWeight:700,fontSize:15}},lt.name_zh),
+        React.createElement('div',{style:{fontSize:12,color:'var(--text2)'}},`${lt.name_en} / ${lt.name_de}`),
+        React.createElement('div',{style:{marginTop:6,fontSize:12}},
+          React.createElement('span',{className:'badge-s',style:{background:lt.paid?'rgba(34,197,94,.15)':'rgba(239,68,68,.15)',
+            color:lt.paid?'var(--green)':'var(--red)'}},lt.paid?'带薪':'无薪'),' ',
+          `默认${lt.default_days}天`,lt.requires_proof?' · 需证明':''),
+        React.createElement('div',{style:{fontSize:11,color:'var(--text3)',marginTop:4}},lt.description)))));
+};
+
+// ══════ Expense ══════
+const ExpPage=({t})=>{
+  const[exps,setExps]=useState([]);
+  useEffect(()=>{API.get('/api/expenses').then(setExps)},[]);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['报销号','员工','职级','类型','金额','日期','描述','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,exps.map(e=>React.createElement('tr',{key:e.id},
+          React.createElement('td',null,e.id),React.createElement('td',null,e.employee_name),
+          React.createElement('td',{style:{color:gradeColor(e.grade),fontWeight:700}},e.grade),
+          React.createElement('td',null,e.claim_type),
+          React.createElement('td',{style:{fontWeight:700,color:'var(--green)'}},`€${e.amount}`),
+          React.createElement('td',null,e.claim_date),React.createElement('td',null,e.description),
+          React.createElement('td',null,React.createElement(SBadge,{s:e.status}))))))));
+};
+
+// ══════ Performance ══════
+const PerfPage=({t})=>{
+  const[reviews,setR]=useState([]);
+  useEffect(()=>{API.get('/api/performance').then(setR)},[]);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['编号','员工','职级','周期','类型','总分','评级','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,reviews.map(r=>
+          React.createElement('tr',{key:r.id},
+            React.createElement('td',null,r.id),React.createElement('td',null,r.employee_name),
+            React.createElement('td',{style:{color:gradeColor(r.grade),fontWeight:700}},r.grade),
+            React.createElement('td',null,r.review_period),React.createElement('td',null,r.review_type),
+            React.createElement('td',{style:{fontWeight:700,fontSize:16,color:r.total_score>=90?'var(--green)':r.total_score>=80?'var(--pri)':'var(--yellow)'}},r.total_score),
+            React.createElement('td',null,React.createElement('span',{className:`badge-s ${r.rating?.includes('A')?'bg-green':r.rating?.includes('B')?'bg-blue':'bg-yellow'}`},r.rating)),
+            React.createElement('td',null,React.createElement(SBadge,{s:r.status})))))));
+};
+
+// ══════ Quotation ══════
+const QuotePage=({t})=>{
+  const[tpls,setTpls]=useState([]);const[recs,setRecs]=useState([]);const[tab,setTab]=useState('rec');
+  useEffect(()=>{API.get('/api/quotation-templates').then(setTpls);API.get('/api/quotations').then(setRecs);},[]);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'tabs'},
+      [['rec','报价记录'],['tpl','报价模板']].map(([k,l])=>React.createElement('div',{key:k,className:`tab ${tab===k?'active':''}`,onClick:()=>setTab(k)},l))),
+    tab==='rec'?React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['报价号','客户','类型','仓库','人数','单价','总额','审批','客户回复'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,recs.map(r=>React.createElement('tr',{key:r.id},
+          React.createElement('td',null,r.id),React.createElement('td',null,r.client_name),
+          React.createElement('td',null,`${r.biz_type}·${r.service_type}`),
+          React.createElement('td',null,r.warehouse_code),React.createElement('td',null,r.headcount),
+          React.createElement('td',{style:{color:'var(--green)',fontWeight:700}},`€${r.final_price}`),
+          React.createElement('td',{style:{fontWeight:700}},`€${r.total_amount}`),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.approve_status})),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.client_response})))))))
+    :React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:12}},
+      tpls.map(tp=>React.createElement('div',{key:tp.id,className:'card'},
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between'}},
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontWeight:700,fontSize:15}},tp.name),
+            React.createElement('div',{style:{fontSize:12,color:'var(--text2)'}},`${tp.biz_type} · ${tp.service_type}`)),
+          React.createElement('div',{style:{textAlign:'right'}},
+            React.createElement('div',{style:{fontSize:20,fontWeight:700,color:'var(--green)'}},`€${tp.base_price}`),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text3)'}},tp.unit))),
+        React.createElement('div',{style:{marginTop:6,fontSize:12,color:'var(--text3)'}},
+          `夜班+€${tp.night_surcharge} 周末+€${tp.weekend_surcharge} 节假+€${tp.holiday_surcharge}`)))));
+};
+
+// ══════ Files ══════
+const FilePage=({t})=>{
+  const[files,setF]=useState([]);const[emps,setE]=useState([]);const[selEmp,setSel]=useState('');
+  useEffect(()=>{API.get('/api/files').then(setF);API.get('/api/employees').then(setE);},[]);
+  const empNames=Object.fromEntries(emps.map(e=>[e.id,e.name]));
+  const grouped=files.reduce((a,f)=>{(a[f.employee_id]=a[f.employee_id]||[]).push(f);return a;},{});
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar'},
+      React.createElement('select',{value:selEmp,onChange:e=>setSel(e.target.value),
+        style:{padding:'7px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:13}},
+        React.createElement('option',{value:''},'全部员工'),
+        emps.map(e=>React.createElement('option',{key:e.id,value:e.id},`${e.id} ${e.name}`)))),
+    Object.entries(grouped).filter(([eid])=>!selEmp||eid===selEmp).map(([eid,fs])=>
+      React.createElement('div',{key:eid,className:'card'},
+        React.createElement('div',{style:{fontWeight:700,marginBottom:8}},`📁 ${empNames[eid]||eid} 的档案`),
+        React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:8}},
+          fs.map(f=>React.createElement('div',{key:f.id,style:{background:'var(--bg)',padding:'8px 12px',borderRadius:6,fontSize:12,border:'1px solid var(--border)'}},
+            React.createElement('div',null,f.confidential?'🔒':'📄',' ',f.file_name),
+            React.createElement('div',{style:{color:'var(--text3)',marginTop:2}},`${f.category} · ${f.stage} · ${f.upload_date}`)))))));
+};
+
+// ══════ Clock ══════
+const ClockPage=()=>{
+  const[time,setTime]=useState(new Date());
+  useEffect(()=>{const t=setInterval(()=>setTime(new Date()),1000);return()=>clearInterval(t)},[]);
+  return React.createElement('div',{className:'fade',style:{display:'flex',flexDirection:'column',alignItems:'center',paddingTop:60}},
+    React.createElement('div',{style:{fontSize:64,fontWeight:700,fontFamily:'monospace',color:'var(--pri)'}},
+      time.toLocaleTimeString('de-DE')),
+    React.createElement('div',{style:{fontSize:18,color:'var(--text2)',margin:'8px 0 30px'}},
+      time.toLocaleDateString('de-DE',{weekday:'long',year:'numeric',month:'long',day:'numeric'})),
+    React.createElement('button',{className:'btn btn-pri',style:{padding:'16px 48px',fontSize:18,borderRadius:12}},
+      '🕐 打卡'));
+};
+
+// ══════ Main App ══════
+const MENU = [
+  {group:'个人',items:[
+    {key:'mypage',icon:'👤',label:'我的页面',roles:['worker','wh','mgr','admin']},
+  ]},
+  {group:'核心',items:[
+    {key:'dashboard',icon:'📊',label:'仪表盘'},
+    {key:'employees',icon:'👥',label:'花名册'},
+    {key:'grades',icon:'🏅',label:'职级体系'},
+    {key:'performance',icon:'📈',label:'绩效考核'},
+  ]},
+  {group:'业务',items:[
+    {key:'quotation',icon:'💰',label:'报价管理'},
+    {key:'timesheet',icon:'⏱️',label:'工时记录'},
+    {key:'container',icon:'📦',label:'装卸柜'},
+    {key:'schedule',icon:'📅',label:'排班'},
+    {key:'dispatch',icon:'🚛',label:'派遣需求'},
+  ]},
+  {group:'人事',items:[
+    {key:'files',icon:'📁',label:'人员档案'},
+    {key:'leave',icon:'🏖️',label:'假期管理'},
+    {key:'expense',icon:'💳',label:'报销审批'},
+    {key:'suppliers',icon:'🏢',label:'供应商'},
+  ]},
+  {group:'财务&系统',items:[
+    {key:'settlement',icon:'💶',label:'财务结算'},
+    {key:'whsalary',icon:'🏭',label:'仓库薪资',roles:['admin','hr','mgr']},
+    {key:'accounts',icon:'🔑',label:'账号管理',roles:['admin','hr','mgr']},
+    {key:'clock',icon:'🕐',label:'打卡'},
+    {key:'admin',icon:'⚙️',label:'权限管理',roles:['admin']},
+  ]}
+];
+
+const App=()=>{
+  const[user,setUser]=useState(null);
+  const[page,setPage]=useState('dashboard');
+  const[lang,setLang]=useState('zh');
+  const[sideOpen,setSide]=useState(false);
+  const t=T[lang];
+
+  useEffect(()=>{if(API.token){API.get('/api/analytics/dashboard').then(d=>{if(d&&!d.detail)setUser({role:'admin'})}).catch(()=>{})}},[]);
+  useEffect(()=>{if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{})},[]);
+
+  if(!user) return React.createElement(LoginPage,{onLogin:setUser,lang,setLang});
+
+  const pages={
+    dashboard:DashPage, employees:EmpPage, grades:GradePage, performance:PerfPage,
+    quotation:QuotePage, files:FilePage, leave:LeavePage, expense:ExpPage,
+    timesheet:TSPage, settlement:SettPage, clock:ClockPage,
+    mypage:MyPage, accounts:AccountPage, whsalary:WHSalaryPage,
+  };
+  const PageComp=pages[page];
+
+  const canView=(item)=>{
+    if(!item.roles)return true;
+    return item.roles.includes(user.role);
+  };
+
+  return React.createElement('div',{className:'app'},
+    sideOpen&&React.createElement('div',{className:'sidebar-mask show',onClick:()=>setSide(false)}),
+    React.createElement('div',{className:`sidebar ${sideOpen?'open':''}`},
+      React.createElement('div',{className:'logo'},'渊博579',React.createElement('small',null,'HR System V6')),
+      MENU.map(g=>{
+        const visibleItems=g.items.filter(canView);
+        if(!visibleItems.length)return null;
+        return React.createElement(React.Fragment,{key:g.group},
+          React.createElement('div',{className:'nav-group'},g.group),
+          visibleItems.map(i=>React.createElement('div',{key:i.key,className:`nav-item ${page===i.key?'active':''}`,
+            onClick:()=>{setPage(i.key);setSide(false)}},i.icon,' ',t[i.key]||i.label)));
+      }),
+      React.createElement('div',{style:{padding:12,borderTop:'1px solid var(--border)',marginTop:'auto'}},
+        React.createElement('div',{style:{display:'flex',gap:4,marginBottom:8}},
+          LANGS.map(l=>React.createElement('span',{key:l.c,onClick:()=>setLang(l.c),
+            style:{cursor:'pointer',padding:'2px 6px',borderRadius:4,fontSize:11,
+              background:lang===l.c?'var(--pri)':'transparent',color:lang===l.c?'#fff':'var(--text3)'}},l.n))),
+        React.createElement('button',{className:'btn btn-ghost btn-sm',style:{width:'100%'},
+          onClick:()=>{API.setToken('');setUser(null)}},t.logout))),
+    React.createElement('div',{className:'main'},
+      React.createElement('div',{className:'header'},
+        React.createElement('div',{className:'menu-btn',onClick:()=>setSide(!sideOpen)},'☰'),
+        React.createElement('div',{className:'title'},t[page]||page),
+        React.createElement('div',{className:'user-info'},
+          React.createElement('span',{className:'badge'},user.role||'admin'),
+          React.createElement('span',null,user.display_name||'Admin'))),
+      React.createElement('div',{className:'content'},
+        PageComp?React.createElement(PageComp,{t,user}):React.createElement('div',{className:'empty'},'模块开发中...'))),
+    React.createElement('div',{id:'toast',className:'toast',style:{display:'none'}}));
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
