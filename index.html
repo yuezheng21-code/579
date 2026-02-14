@@ -130,7 +130,7 @@ tr:hover td{background:rgba(79,110,247,.05)}
       <input type="password" placeholder="请输入密码" autocomplete="current-password" />
     </div>
     <button class="btn btn-pri" style="width:100%;padding:10px;font-size:15px" disabled>登录</button>
-    <div class="hint">若页面长时间只显示此界面，请检查网络/CDN加载或联系管理员。</div>
+    <div class="hint">用户名密码需要联系管理员赋予。若页面长时间只显示此界面，请检查网络/CDN加载。</div>
   </div>
 </div>
 <div id="root"></div>
@@ -246,7 +246,7 @@ const LoginPage=({onLogin,lang,setLang})=>{
           style:{width:'100%',padding:'10px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:14}})),
       React.createElement('button',{className:'btn btn-pri',onClick:submit,disabled:loading,style:{width:'100%',padding:10,fontSize:15}},
         loading?'登录中...':t.login),
-      React.createElement('div',{style:{marginTop:16,fontSize:11,color:'var(--text3)'}},'请联系管理员获取账号')
+      React.createElement('div',{style:{marginTop:16,fontSize:11,color:'var(--text3)'}},'用户名密码需要联系管理员赋予')
     ));
 };
 
