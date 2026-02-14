@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Optional
 import database
 
-database.init_db(); database.seed_data()
+database.init_db(); database.seed_data(); database.ensure_demo_users()
 
 app = FastAPI(title="渊博579 HR V6")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -19,7 +19,7 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-import hashlib, time
+import hashlib, time, hmac, base64
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
@@ -27,10 +27,39 @@ def hash_password(password):
 def verify_password(password, hashed):
     return hash_password(password) == hashed
 
-TOKENS = {}
+SECRET_KEY = os.environ.get("HR_TOKEN_SECRET", "yb579-dev-secret")
+TOKEN_TTL_SECONDS = int(os.environ.get("HR_TOKEN_TTL", 60 * 60 * 24 * 7))
 
-def make_token(username, role):
-    return hashlib.sha256(f"{username}:{role}:{time.time()}".encode()).hexdigest()
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * ((4 - len(data) % 4) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+def make_token(username, role, extra: Optional[dict] = None):
+    payload = {"u": username, "r": role, "iat": int(time.time())}
+    if extra:
+        payload.update(extra)
+    body = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode())
+    sig = hmac.new(SECRET_KEY.encode(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+def _parse_token(token: str):
+    try:
+        body, sig = token.split(".", 1)
+    except ValueError:
+        raise HTTPException(401, "Unauthorized")
+    expected = hmac.new(SECRET_KEY.encode(), body.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        raise HTTPException(401, "Unauthorized")
+    try:
+        payload = json.loads(_b64url_decode(body).decode())
+    except Exception:
+        raise HTTPException(401, "Unauthorized")
+    if int(time.time()) - int(payload.get("iat", 0)) > TOKEN_TTL_SECONDS:
+        raise HTTPException(401, "Token expired")
+    return payload
 
 def generate_password(length=8):
     """生成随机密码"""
@@ -39,8 +68,24 @@ def generate_password(length=8):
 
 def get_user(request: Request):
     token = request.headers.get("Authorization","").replace("Bearer ","")
-    if token not in TOKENS: raise HTTPException(401, "Unauthorized")
-    return TOKENS[token]
+    if not token:
+        raise HTTPException(401, "Unauthorized")
+    payload = _parse_token(token)
+    username = payload.get("u")
+    if not username:
+        raise HTTPException(401, "Unauthorized")
+    db = database.get_db()
+    u = db.execute("SELECT * FROM users WHERE username=? AND active=1", (username,)).fetchone()
+    if u:
+        db.close()
+        return dict(u)
+    if payload.get("pin"):
+        emp = db.execute("SELECT id,name,primary_wh FROM employees WHERE id=?", (username,)).fetchone()
+        db.close()
+        if emp:
+            return {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"], "warehouse_code": emp["primary_wh"]}
+    db.close()
+    raise HTTPException(401, "Unauthorized")
 
 def q(table, where="1=1", params=(), order="rowid DESC", limit=500):
     db = database.get_db()
@@ -74,7 +119,6 @@ def login(req: LoginReq):
     if not u or not verify_password(req.password, u["password_hash"]):
         raise HTTPException(401, "用户名或密码错误")
     token = make_token(u["username"], u["role"])
-    TOKENS[token] = dict(u)
     return {"token": token, "user": {"username": u["username"], "display_name": u["display_name"], "role": u["role"], "employee_id": u["employee_id"]}}
 
 @app.post("/api/pin-login")
@@ -83,8 +127,7 @@ def pin_login(req: PinReq):
     emp = db.execute("SELECT * FROM employees WHERE pin=?", (req.pin,)).fetchone()
     db.close()
     if not emp: raise HTTPException(401, "PIN无效")
-    token = make_token(emp["id"], "worker")
-    TOKENS[token] = {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"], "warehouse_code": emp["primary_wh"]}
+    token = make_token(emp["id"], "worker", {"pin": 1})
     return {"token": token, "user": {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"]}}
 
 # ── Employees ──
@@ -195,6 +238,9 @@ async def batch_generate_accounts(request: Request, user=Depends(get_user)):
 @app.post("/api/accounts/reset-password")
 async def reset_password(request: Request, user=Depends(get_user)):
     """重置密码"""
+    if user.get("role") not in ["admin", "hr", "mgr"]:
+        raise HTTPException(403, "无权限执行密码重置")
+
     data = await request.json()
     username = data.get("username")
 
@@ -205,7 +251,7 @@ async def reset_password(request: Request, user=Depends(get_user)):
         raise HTTPException(404, "账号不存在")
 
     new_password = generate_password(8)
-    password_hash = bcrypt.hash(new_password)
+    password_hash = hash_password(new_password)
     db.execute("UPDATE users SET password_hash=? WHERE username=?", (password_hash, username))
     db.commit()
     db.close()
@@ -699,8 +745,19 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 def spa(path: str):
     fp = os.path.join(STATIC_DIR, path)
     if path and os.path.isfile(fp): return FileResponse(fp)
+
+    # 兼容部署时前端文件位于项目根目录（如 Railway）
+    root_fp = os.path.join(os.path.dirname(__file__), path)
+    if path and os.path.isfile(root_fp):
+        return FileResponse(root_fp)
+
     idx = os.path.join(STATIC_DIR, "index.html")
     if os.path.isfile(idx): return FileResponse(idx)
+
+    root_idx = os.path.join(os.path.dirname(__file__), "index.html")
+    if os.path.isfile(root_idx):
+        return FileResponse(root_idx)
+
     return JSONResponse({"msg": "渊博579 HR V6 API running"})
 
 if __name__ == "__main__":

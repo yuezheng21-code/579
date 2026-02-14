@@ -40,6 +40,11 @@ html,body,#root{height:100%;background:var(--bg);color:var(--text);font-family:-
 .content{flex:1;overflow-y:auto;padding:16px;padding-bottom:calc(16px + var(--safe-bottom))}
 /* Components */
 .card{background:var(--card);border-radius:var(--radius);padding:16px;margin-bottom:12px;border:1px solid var(--border)}
+.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;background:radial-gradient(circle at 20% 20%,rgba(79,110,247,.18),transparent 38%),radial-gradient(circle at 80% 80%,rgba(99,102,241,.16),transparent 40%),var(--bg)}
+.login-card{width:min(420px,100%);padding:24px 20px;border-radius:14px;box-shadow:0 12px 42px rgba(2,6,23,.45);text-align:center}
+.login-fallback{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at 20% 20%,rgba(79,110,247,.18),transparent 38%),radial-gradient(circle at 80% 80%,rgba(99,102,241,.16),transparent 40%),var(--bg);z-index:5}
+.login-fallback .login-card{max-width:420px;width:100%}
+.login-fallback .hint{margin-top:10px;font-size:12px;color:var(--text3)}
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:16px}
 .stat{background:var(--card);border-radius:var(--radius);padding:14px;border:1px solid var(--border);text-align:center}
 .stat .num{font-size:28px;font-weight:700;color:var(--pri)}
@@ -98,16 +103,120 @@ tr:hover td{background:rgba(79,110,247,.05)}
   .content{padding:12px}
   .form-row{flex-direction:column}
   .form-field{min-width:100%}
+  .login-page{padding:14px}
+  .login-card{padding:18px 14px}
+  .table-wrap{overflow:visible}
+  table,thead,tbody,tr,th,td{display:block}
+  thead{display:none}
+  tr{border:1px solid var(--border);border-radius:10px;background:var(--card);padding:8px 10px;margin-bottom:10px}
+  td{padding:6px 0;border-top:none;white-space:normal}
+  td:not(:last-child){border-bottom:1px dashed rgba(148,163,184,.22)}
 }
 /* Print */
 @media print{.sidebar,.header{display:none!important}.content{padding:0!important}}
-/* Login Mobile Fix */
-.login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:16px;background:var(--bg)}
-.login-card{width:100%;max-width:340px;text-align:center}
 </style>
 </head>
 <body>
+<div id="login-fallback" class="login-fallback">
+  <div class="card login-card">
+    <div style="font-size:28px;font-weight:700;color:var(--pri);margin-bottom:4px">渊博579</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:20px">HR Management System V6</div>
+    <div id="fallback-lang" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-bottom:12px"></div>
+    <div class="form-field" style="text-align:left;margin-bottom:8px">
+      <label id="fallback-label-username">用户名</label>
+      <input id="fallback-username" type="text" placeholder="请输入用户名" autocomplete="username" />
+    </div>
+    <div class="form-field" style="text-align:left;margin-bottom:12px">
+      <label id="fallback-label-password">密码</label>
+      <input id="fallback-password" type="password" placeholder="请输入密码" autocomplete="current-password" />
+    </div>
+    <button id="fallback-login" class="btn btn-pri" style="width:100%;padding:10px;font-size:15px">登录</button>
+    <div id="fallback-result" class="hint" style="display:none"></div>
+    <div id="fallback-hint" class="hint">用户名密码需要联系管理员赋予。若页面长时间只显示此界面，请检查网络/CDN加载。</div>
+  </div>
+</div>
 <div id="root"></div>
+<script>
+(() => {
+  const fallback = document.getElementById('login-fallback');
+  if(!fallback) return;
+  const langs = [
+    {c:'zh',n:'中文',u:'用户名',p:'密码',l:'登录',h:'用户名密码需要联系管理员赋予。若页面长时间只显示此界面，请检查网络/CDN加载。',phu:'请输入用户名',php:'请输入密码'},
+    {c:'en',n:'English',u:'Username',p:'Password',l:'Login',h:'Contact administrator for account credentials. If only this page appears, check CDN/network loading.',phu:'Enter username',php:'Enter password'},
+    {c:'de',n:'Deutsch',u:'Benutzer',p:'Passwort',l:'Anmelden',h:'Zugangsdaten bitte beim Administrator anfordern. Wenn nur diese Seite bleibt, CDN/Netzwerk prüfen.',phu:'Benutzer eingeben',php:'Passwort eingeben'},
+    {c:'vi',n:'Tiếng Việt',u:'Tên đăng nhập',p:'Mật khẩu',l:'Đăng nhập',h:'Vui lòng liên hệ quản trị viên để được cấp tài khoản. Nếu chỉ thấy màn hình này, hãy kiểm tra CDN/mạng.',phu:'Nhập tên đăng nhập',php:'Nhập mật khẩu'},
+    {c:'ar',n:'العربية',u:'اسم المستخدم',p:'كلمة المرور',l:'تسجيل الدخول',h:'يرجى التواصل مع المسؤول لمنح بيانات الدخول. إذا ظهرت هذه الشاشة فقط، تحقق من الشبكة/CDN.',phu:'أدخل اسم المستخدم',php:'أدخل كلمة المرور'},
+    {c:'hu',n:'Magyar',u:'Felhasználónév',p:'Jelszó',l:'Bejelentkezés',h:'A belépési adatokért fordulj a rendszergazdához. Ha csak ez a képernyő látszik, ellenőrizd a hálózatot/CDN-t.',phu:'Felhasználónév',php:'Jelszó'}
+  ];
+  let lang = localStorage.getItem('fallback_lang') || 'zh';
+  const map = Object.fromEntries(langs.map(x=>[x.c,x]));
+  const langWrap = document.getElementById('fallback-lang');
+  const uLabel = document.getElementById('fallback-label-username');
+  const pLabel = document.getElementById('fallback-label-password');
+  const uInput = document.getElementById('fallback-username');
+  const pInput = document.getElementById('fallback-password');
+  const btn = document.getElementById('fallback-login');
+  const hint = document.getElementById('fallback-hint');
+  const result = document.getElementById('fallback-result');
+
+  const showResult = (msg, ok=false) => {
+    result.style.display = 'block';
+    result.style.color = ok ? 'var(--green)' : 'var(--red)';
+    result.textContent = msg;
+  };
+  const renderLang = () => {
+    const cur = map[lang] || map.zh;
+    uLabel.textContent = cur.u;
+    pLabel.textContent = cur.p;
+    btn.textContent = cur.l;
+    hint.textContent = cur.h;
+    uInput.placeholder = cur.phu;
+    pInput.placeholder = cur.php;
+    langWrap.innerHTML = '';
+    langs.forEach(l => {
+      const chip = document.createElement('span');
+      chip.textContent = l.n;
+      chip.style.cssText = 'cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;';
+      chip.style.background = l.c===lang ? 'var(--pri)' : 'var(--card2)';
+      chip.style.color = l.c===lang ? '#fff' : 'var(--text2)';
+      chip.onclick = () => {
+        lang = l.c;
+        localStorage.setItem('fallback_lang', lang);
+        renderLang();
+      };
+      langWrap.appendChild(chip);
+    });
+  };
+  const doLogin = async () => {
+    const username = uInput.value.trim();
+    const password = pInput.value;
+    if(!username || !password) return showResult('请输入用户名和密码');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({username, password})
+      });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok || !data.token){
+        throw new Error(data.detail || '登录失败');
+      }
+      localStorage.setItem('hr_token', data.token);
+      localStorage.setItem('hr_user', JSON.stringify(data.user || {}));
+      showResult('登录成功，正在进入系统...', true);
+      setTimeout(() => location.reload(), 300);
+    } catch (e) {
+      showResult(String(e.message || e));
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  btn.addEventListener('click', doLogin);
+  pInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') doLogin(); });
+  renderLang();
+})();
+</script>
 <script type="text/babel">
 const {useState,useEffect,useCallback,useMemo,useRef,createContext,useContext} = React;
 
@@ -139,14 +248,46 @@ const T = {
     edit:'Bearbeiten',delete:'Löschen',export:'Export',approve:'Genehmigen',save:'Speichern',cancel:'Abbrechen',
     name:'Name',grade:'Stufe',status:'Status',date:'Datum',amount:'Betrag',total:'Gesamt',
     pending:'Ausstehend',approved:'Genehmigt',rejected:'Abgelehnt',all:'Alle',
-    mypage:'Meine Seite',accounts:'Konten',whsalary:'Lager Gehalt'}
+    mypage:'Meine Seite',accounts:'Konten',whsalary:'Lager Gehalt'},
+  vi:{dashboard:'Bảng điều khiển',employees:'Nhân viên',suppliers:'Nhà cung cấp',grades:'Hệ cấp bậc',performance:'Hiệu suất',
+    quotation:'Báo giá',files:'Hồ sơ nhân sự',leave:'Nghỉ phép',expense:'Chi phí',
+    timesheet:'Chấm công',container:'Container',settlement:'Quyết toán',schedule:'Lịch làm việc',
+    dispatch:'Điều phối',clock:'Chấm giờ',messages:'Tin nhắn',analytics:'Phân tích',admin:'Quản trị',
+    login:'Đăng nhập',logout:'Đăng xuất',username:'Tên đăng nhập',password:'Mật khẩu',search:'Tìm kiếm',add:'Thêm',
+    edit:'Sửa',delete:'Xóa',export:'Xuất',approve:'Phê duyệt',save:'Lưu',cancel:'Hủy',
+    name:'Tên',grade:'Cấp bậc',status:'Trạng thái',date:'Ngày',amount:'Số tiền',total:'Tổng',
+    pending:'Chờ duyệt',approved:'Đã duyệt',rejected:'Từ chối',all:'Tất cả',
+    mypage:'Trang của tôi',accounts:'Tài khoản',whsalary:'Lương kho'},
+  ar:{dashboard:'لوحة التحكم',employees:'الموظفون',suppliers:'الموردون',grades:'نظام الدرجات',performance:'الأداء',
+    quotation:'عروض الأسعار',files:'ملفات الموظفين',leave:'إدارة الإجازات',expense:'المصروفات',
+    timesheet:'سجل الساعات',container:'الحاويات',settlement:'التسوية',schedule:'الجدول',
+    dispatch:'التوزيع',clock:'الساعة',messages:'الرسائل',analytics:'التحليلات',admin:'الإدارة',
+    login:'تسجيل الدخول',logout:'تسجيل الخروج',username:'اسم المستخدم',password:'كلمة المرور',search:'بحث',add:'إضافة',
+    edit:'تعديل',delete:'حذف',export:'تصدير',approve:'اعتماد',save:'حفظ',cancel:'إلغاء',
+    name:'الاسم',grade:'الدرجة',status:'الحالة',date:'التاريخ',amount:'المبلغ',total:'الإجمالي',
+    pending:'قيد الانتظار',approved:'تم الاعتماد',rejected:'مرفوض',all:'الكل',
+    mypage:'صفحتي',accounts:'الحسابات',whsalary:'راتب المستودع'},
+  hu:{dashboard:'Vezérlőpult',employees:'Munkatársak',suppliers:'Beszállítók',grades:'Szint rendszer',performance:'Teljesítmény',
+    quotation:'Árajánlat',files:'Személyi akták',leave:'Szabadság',expense:'Költségek',
+    timesheet:'Munkaidő',container:'Konténer',settlement:'Elszámolás',schedule:'Beosztás',
+    dispatch:'Diszpécselés',clock:'Óra',messages:'Üzenetek',analytics:'Analitika',admin:'Admin',
+    login:'Bejelentkezés',logout:'Kijelentkezés',username:'Felhasználónév',password:'Jelszó',search:'Keresés',add:'Új',
+    edit:'Szerkesztés',delete:'Törlés',export:'Export',approve:'Jóváhagyás',save:'Mentés',cancel:'Mégse',
+    name:'Név',grade:'Szint',status:'Állapot',date:'Dátum',amount:'Összeg',total:'Összesen',
+    pending:'Függőben',approved:'Jóváhagyva',rejected:'Elutasítva',all:'Összes',
+    mypage:'Saját oldal',accounts:'Fiókok',whsalary:'Raktárbér'}
 };
-const LANGS = [{c:'zh',n:'中文'},{c:'en',n:'English'},{c:'de',n:'Deutsch'}];
+const LANGS = [{c:'zh',n:'中文'},{c:'en',n:'English'},{c:'de',n:'Deutsch'},{c:'vi',n:'Tiếng Việt'},{c:'ar',n:'العربية'},{c:'hu',n:'Magyar'}];
+const LOCALE_MAP = {zh:'zh-CN',en:'en-US',de:'de-DE',vi:'vi-VN',ar:'ar-SA',hu:'hu-HU'};
 
 // ══════ API Helper ══════
 const API = {
-  token: localStorage.getItem('hr_token') || '',
-  setToken(t){ this.token=t; localStorage.setItem('hr_token',t) },
+  token: localStorage.getItem('hr_token') || localStorage.getItem('token') || '',
+  setToken(t){
+    this.token=t;
+    localStorage.setItem('hr_token',t);
+    localStorage.setItem('token',t);
+  },
   async req(method,url,body){
     const opt = {method, headers:{'Content-Type':'application/json'}};
     if(this.token) opt.headers['Authorization'] = 'Bearer '+this.token;
@@ -198,7 +339,9 @@ const LoginPage=({onLogin,lang,setLang})=>{
     const r=await API.post('/api/login',{username:u,password:p});
     setLoading(false);
     if(!r||r.detail){setErr(r?.detail||'登录失败');return;}
-    API.setToken(r.token); onLogin(r.user);
+    API.setToken(r.token);
+    localStorage.setItem('hr_user',JSON.stringify(r.user||{}));
+    onLogin(r.user);
   };
   return React.createElement('div',{className:'login-page'},
     React.createElement('div',{className:'card fade login-card'},
@@ -209,14 +352,18 @@ const LoginPage=({onLogin,lang,setLang})=>{
           style:{cursor:'pointer',padding:'3px 8px',borderRadius:4,fontSize:12,
             background:lang===l.c?'var(--pri)':'var(--card2)',color:lang===l.c?'#fff':'var(--text2)'}},l.n))),
       err&&React.createElement('div',{style:{color:'var(--red)',fontSize:13,marginBottom:8}},err),
-      React.createElement('input',{value:u,onChange:e=>setU(e.target.value),placeholder:t.username,
-        style:{width:'100%',padding:'10px 12px',marginBottom:8,background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:14}}),
-      React.createElement('input',{type:'password',value:p,onChange:e=>setP(e.target.value),placeholder:t.password,
-        onKeyDown:e=>e.key==='Enter'&&submit(),
-        style:{width:'100%',padding:'10px 12px',marginBottom:16,background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:14}}),
+      React.createElement('div',{className:'form-field',style:{textAlign:'left',marginBottom:8}},
+        React.createElement('label',null,t.username),
+        React.createElement('input',{value:u,onChange:e=>setU(e.target.value),placeholder:'请输入用户名',autoComplete:'username',
+          style:{width:'100%',padding:'10px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:14}})),
+      React.createElement('div',{className:'form-field',style:{textAlign:'left',marginBottom:16}},
+        React.createElement('label',null,t.password),
+        React.createElement('input',{type:'password',value:p,onChange:e=>setP(e.target.value),placeholder:'请输入密码',autoComplete:'current-password',
+          onKeyDown:e=>e.key==='Enter'&&submit(),
+          style:{width:'100%',padding:'10px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:14}})),
       React.createElement('button',{className:'btn btn-pri',onClick:submit,disabled:loading,style:{width:'100%',padding:10,fontSize:15}},
         loading?'登录中...':t.login),
-      React.createElement('div',{style:{marginTop:16,fontSize:11,color:'var(--text3)'}},'请联系管理员获取账号')
+      React.createElement('div',{style:{marginTop:16,fontSize:11,color:'var(--text3)'}},'用户名密码需要联系管理员赋予')
     ));
 };
 
@@ -725,16 +872,16 @@ const FilePage=({t})=>{
 };
 
 // ══════ Clock ══════
-const ClockPage=()=>{
+const ClockPage=({lang,t})=>{
   const[time,setTime]=useState(new Date());
   useEffect(()=>{const t=setInterval(()=>setTime(new Date()),1000);return()=>clearInterval(t)},[]);
   return React.createElement('div',{className:'fade',style:{display:'flex',flexDirection:'column',alignItems:'center',paddingTop:60}},
     React.createElement('div',{style:{fontSize:64,fontWeight:700,fontFamily:'monospace',color:'var(--pri)'}},
-      time.toLocaleTimeString('de-DE')),
+      time.toLocaleTimeString(LOCALE_MAP[lang]||'en-US')),
     React.createElement('div',{style:{fontSize:18,color:'var(--text2)',margin:'8px 0 30px'}},
-      time.toLocaleDateString('de-DE',{weekday:'long',year:'numeric',month:'long',day:'numeric'})),
+      time.toLocaleDateString(LOCALE_MAP[lang]||'en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})),
     React.createElement('button',{className:'btn btn-pri',style:{padding:'16px 48px',fontSize:18,borderRadius:12}},
-      '🕐 打卡'));
+      `🕐 ${t.clock}`));
 };
 
 // ══════ Main App ══════
@@ -771,14 +918,26 @@ const MENU = [
 ];
 
 const App=()=>{
-  const[user,setUser]=useState(null);
+  const[user,setUser]=useState(()=>{
+    try{
+      const raw = localStorage.getItem('hr_user') || localStorage.getItem('user') || 'null';
+      const parsed = JSON.parse(raw);
+      if(parsed) localStorage.setItem('hr_user', JSON.stringify(parsed));
+      return parsed;
+    }catch{return null}
+  });
   const[page,setPage]=useState('dashboard');
   const[lang,setLang]=useState('zh');
   const[sideOpen,setSide]=useState(false);
   const t=T[lang];
 
-  useEffect(()=>{if(API.token){API.get('/api/analytics/dashboard').then(d=>{if(d&&!d.detail)setUser({role:'admin'})}).catch(()=>{})}},[]);
-  useEffect(()=>{if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{})},[]);
+  useEffect(()=>{
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.getRegistrations()
+        .then(rs=>Promise.all(rs.map(r=>r.unregister())))
+        .catch(()=>{});
+    }
+  },[]);
 
   if(!user) return React.createElement(LoginPage,{onLogin:setUser,lang,setLang});
 
@@ -813,7 +972,7 @@ const App=()=>{
             style:{cursor:'pointer',padding:'2px 6px',borderRadius:4,fontSize:11,
               background:lang===l.c?'var(--pri)':'transparent',color:lang===l.c?'#fff':'var(--text3)'}},l.n))),
         React.createElement('button',{className:'btn btn-ghost btn-sm',style:{width:'100%'},
-          onClick:()=>{API.setToken('');setUser(null)}},t.logout))),
+          onClick:()=>{API.setToken('');localStorage.removeItem('hr_user');localStorage.removeItem('user');setUser(null)}},t.logout))),
     React.createElement('div',{className:'main'},
       React.createElement('div',{className:'header'},
         React.createElement('div',{className:'menu-btn',onClick:()=>setSide(!sideOpen)},'☰'),
@@ -822,11 +981,13 @@ const App=()=>{
           React.createElement('span',{className:'badge'},user.role||'admin'),
           React.createElement('span',null,user.display_name||'Admin'))),
       React.createElement('div',{className:'content'},
-        PageComp?React.createElement(PageComp,{t,user}):React.createElement('div',{className:'empty'},'模块开发中...'))),
+        PageComp?React.createElement(PageComp,{t,user,lang}):React.createElement('div',{className:'empty'},'模块开发中...'))),
     React.createElement('div',{id:'toast',className:'toast',style:{display:'none'}}));
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+const fallback=document.getElementById('login-fallback');
+if(fallback) fallback.style.display='none';
 </script>
 </body>
 </html>
