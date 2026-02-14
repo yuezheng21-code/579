@@ -757,6 +757,30 @@ def _resolve_frontend_file(path: str):
             return cand
     return None
 
+@app.get("/api/health")
+def health():
+    return {"ok": True, "service": "yb579-hr", "time": datetime.utcnow().isoformat() + "Z"}
+
+@app.get("/api/ready")
+def ready():
+    idx = _resolve_frontend_file("index.html")
+    db_ok = True
+    err = ""
+    try:
+        db = database.get_db()
+        db.execute("SELECT 1").fetchone()
+        db.close()
+    except Exception as e:
+        db_ok = False
+        err = str(e)
+    return {
+        "ok": bool(idx) and db_ok,
+        "index_found": bool(idx),
+        "index_path": idx or "",
+        "db_ok": db_ok,
+        "error": err,
+    }
+
 @app.get("/")
 def spa_root():
     idx = _resolve_frontend_file("index.html")
