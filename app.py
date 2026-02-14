@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Optional
 import database
 
-database.init_db(); database.seed_data()
+database.init_db(); database.seed_data(); database.ensure_demo_users()
 
 app = FastAPI(title="渊博579 HR V6")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -195,6 +195,9 @@ async def batch_generate_accounts(request: Request, user=Depends(get_user)):
 @app.post("/api/accounts/reset-password")
 async def reset_password(request: Request, user=Depends(get_user)):
     """重置密码"""
+    if user.get("role") not in ["admin", "hr", "mgr"]:
+        raise HTTPException(403, "无权限执行密码重置")
+
     data = await request.json()
     username = data.get("username")
 
@@ -205,7 +208,7 @@ async def reset_password(request: Request, user=Depends(get_user)):
         raise HTTPException(404, "账号不存在")
 
     new_password = generate_password(8)
-    password_hash = bcrypt.hash(new_password)
+    password_hash = hash_password(new_password)
     db.execute("UPDATE users SET password_hash=? WHERE username=?", (password_hash, username))
     db.commit()
     db.close()
@@ -699,8 +702,19 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 def spa(path: str):
     fp = os.path.join(STATIC_DIR, path)
     if path and os.path.isfile(fp): return FileResponse(fp)
+
+    # 兼容部署时前端文件位于项目根目录（如 Railway）
+    root_fp = os.path.join(os.path.dirname(__file__), path)
+    if path and os.path.isfile(root_fp):
+        return FileResponse(root_fp)
+
     idx = os.path.join(STATIC_DIR, "index.html")
     if os.path.isfile(idx): return FileResponse(idx)
+
+    root_idx = os.path.join(os.path.dirname(__file__), "index.html")
+    if os.path.isfile(root_idx):
+        return FileResponse(root_idx)
+
     return JSONResponse({"msg": "渊博579 HR V6 API running"})
 
 if __name__ == "__main__":

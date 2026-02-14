@@ -297,6 +297,30 @@ def hash_password(password):
 def verify_password(password, hashed):
     return hash_password(password) == hashed
 
+def ensure_demo_users():
+    """确保演示账号可用（用于部署后角色测试）"""
+    demo_users = [
+        ("admin", "admin123", "系统管理员", "admin"),
+        ("hr", "hr123", "赵慧(HR)", "hr"),
+        ("mgr579", "579pass", "张伟(579)", "mgr"),
+        ("fin", "fin123", "孙琳(财务)", "fin"),
+        ("wh", "wh123", "王磊(仓库)", "wh"),
+        ("worker1", "w123", "张三", "worker"),
+    ]
+    conn = get_db(); c = conn.cursor()
+    for username, password, display_name, role in demo_users:
+        c.execute(
+            """INSERT INTO users(username,password_hash,display_name,role,active)
+               VALUES(?,?,?,?,1)
+               ON CONFLICT(username) DO UPDATE SET
+                   password_hash=excluded.password_hash,
+                   display_name=excluded.display_name,
+                   role=excluded.role,
+                   active=1""",
+            (username, hash_password(password), display_name, role),
+        )
+    conn.commit(); conn.close()
+
 def seed_data():
     conn = get_db(); c = conn.cursor()
     if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0:
