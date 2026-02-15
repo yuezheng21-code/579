@@ -254,6 +254,8 @@ CREATE TABLE IF NOT EXISTS container_records (
     id TEXT PRIMARY KEY, container_no TEXT, work_date TEXT,
     warehouse_code TEXT, biz_line TEXT,
     container_type TEXT DEFAULT '40GP', load_type TEXT DEFAULT '卸柜',
+    dock_no TEXT,                                    -- 垛口
+    ratio REAL DEFAULT 0,                            -- 比例
     team_no TEXT, team_size INTEGER DEFAULT 2, member_ids TEXT,
     start_time TEXT, end_time TEXT, duration_minutes REAL DEFAULT 0,
     client_revenue REAL DEFAULT 0, team_pay REAL DEFAULT 0,

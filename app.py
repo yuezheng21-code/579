@@ -1427,6 +1427,23 @@ def get_settlement(mode: str = "own", user=Depends(get_user)):
         rows = db.execute("SELECT employee_id,employee_name,grade,warehouse_code,SUM(hours) h,SUM(hourly_pay) pay,SUM(ssi_deduct) ssi,SUM(tax_deduct) tax,SUM(net_pay) net FROM timesheet WHERE source='自有' GROUP BY employee_id").fetchall()
     elif mode == "supplier":
         rows = db.execute("SELECT supplier_id,warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) pay FROM timesheet WHERE source='供应商' GROUP BY supplier_id").fetchall()
+    elif mode == "warehouse_income":
+        # 对仓库的进账版 - Income report per warehouse (what warehouses owe us)
+        rows = db.execute("""SELECT warehouse_code,
+            COUNT(DISTINCT employee_id) headcount, SUM(hours) total_hours,
+            SUM(hourly_pay + piece_pay + perf_bonus + other_fee) gross_income,
+            COUNT(DISTINCT work_date) work_days
+            FROM timesheet GROUP BY warehouse_code""").fetchall()
+    elif mode == "worker_expense":
+        # 对工人的出账版 - Expense report per worker per warehouse (what we pay workers)
+        rows = db.execute("""SELECT employee_id, employee_name, warehouse_code, grade,
+            SUM(hours) total_hours, SUM(hourly_pay) hourly_total,
+            SUM(piece_pay) piece_total, SUM(perf_bonus) perf_total,
+            SUM(other_fee) other_total,
+            SUM(hourly_pay + piece_pay + perf_bonus + other_fee) gross_pay,
+            SUM(ssi_deduct) ssi_total, SUM(tax_deduct) tax_total,
+            SUM(net_pay) net_total
+            FROM timesheet GROUP BY employee_id, warehouse_code""").fetchall()
     else:
         rows = db.execute("SELECT warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) cost FROM timesheet GROUP BY warehouse_code").fetchall()
     db.close(); return [dict(r) for r in rows]
@@ -1651,20 +1668,95 @@ TABLE_EXPORT_FIELDS = {
                         "claim_type","amount","currency","claim_date","description","status"],
     "performance_reviews": ["id","employee_id","employee_name","grade","review_period",
                              "review_type","total_score","rating","reviewer","status"],
+    "container_records": ["id","container_no","work_date","warehouse_code","container_type",
+                           "load_type","dock_no","ratio","team_no","team_size","member_ids",
+                           "start_time","end_time","duration_minutes",
+                           "client_revenue","team_pay","split_method","wh_status","notes"],
+    "schedules": ["id","employee_id","employee_name","warehouse_code","work_date",
+                   "shift","start_time","end_time","position","biz_line","status","notes"],
+    "dispatch_needs": ["id","biz_line","warehouse_code","position","headcount",
+                        "start_date","end_date","shift","client_settle","client_rate",
+                        "matched_count","status","priority","requester","notes"],
 }
 
+MODULE_MAP = {"employees": "employees", "suppliers": "suppliers", "timesheet": "timesheet",
+              "warehouses": "warehouse", "leave_requests": "leave", "expense_claims": "expense",
+              "performance_reviews": "performance", "container_records": "container",
+              "schedules": "schedule", "dispatch_needs": "dispatch"}
+
+# Chinese labels for export template headers
+TABLE_FIELD_LABELS = {
+    "employees": {"id":"工号","name":"姓名","phone":"电话","email":"邮箱","nationality":"国籍","gender":"性别",
+                   "birth_date":"出生日期","id_type":"证件类型","id_number":"证件号码","address":"地址",
+                   "source":"来源","supplier_id":"供应商ID","biz_line":"业务线","department":"部门",
+                   "primary_wh":"主仓库","dispatch_whs":"派遣仓库","position":"岗位","grade":"职级",
+                   "wage_level":"薪级","settle_method":"结算方式","base_salary":"基本工资","hourly_rate":"时薪",
+                   "contract_type":"合同类型","dispatch_type":"派遣类型","contract_start":"合同开始",
+                   "contract_end":"合同结束","emergency_contact":"紧急联系人","emergency_phone":"紧急联系电话",
+                   "work_permit_no":"工作许可号","work_permit_expiry":"工作许可到期","status":"状态",
+                   "join_date":"入职日期","leave_date":"离职日期"},
+    "suppliers": {"id":"供应商ID","name":"名称","type":"类型","biz_line":"业务线","contract_no":"合同编号",
+                   "contract_start":"合同开始","contract_end":"合同结束","settle_cycle":"结算周期",
+                   "currency":"币种","contact_name":"联系人","contact_phone":"联系电话","contact_email":"邮箱",
+                   "address":"地址","tax_handle":"税务处理","service_scope":"服务范围","dispatch_types":"派遣类型",
+                   "bank_name":"银行","bank_account":"银行账号","max_headcount":"最大人数",
+                   "current_headcount":"当前人数","status":"状态","rating":"评级","notes":"备注"},
+    "timesheet": {"id":"编号","employee_id":"工号","employee_name":"姓名","source":"来源","supplier_id":"供应商",
+                   "biz_line":"业务线","work_date":"工作日期","warehouse_code":"仓库","start_time":"开始时间",
+                   "end_time":"结束时间","hours":"工时","position":"岗位","grade":"职级","settle_method":"结算方式",
+                   "base_rate":"基础费率","hourly_pay":"时薪","piece_pay":"计件","perf_bonus":"绩效奖金",
+                   "other_fee":"其他费用","ssi_deduct":"社保扣除","tax_deduct":"税扣除","net_pay":"实发",
+                   "container_no":"柜号","container_type":"柜型","wh_status":"状态","notes":"备注"},
+    "warehouses": {"code":"仓库编码","name":"仓库名称","address":"地址","manager":"经理","phone":"电话",
+                    "client_name":"客户","project_no":"项目编号","biz_line":"业务线","client_settle":"客户结算",
+                    "service_type":"服务类型","cooperation_mode":"合作模式","contract_start_date":"合同开始",
+                    "contract_end_date":"合同结束","headcount_quota":"合同人数","current_headcount":"当前人数",
+                    "tax_number":"税号","contact_person":"联系人","contact_email":"联系邮箱"},
+    "leave_requests": {"id":"编号","employee_id":"工号","employee_name":"姓名","grade":"职级",
+                        "warehouse_code":"仓库","leave_type":"假期类型","start_date":"开始日期",
+                        "end_date":"结束日期","days":"天数","reason":"原因","status":"状态"},
+    "expense_claims": {"id":"编号","employee_id":"工号","employee_name":"姓名","grade":"职级",
+                        "department":"部门","claim_type":"报销类型","amount":"金额","currency":"币种",
+                        "claim_date":"报销日期","description":"描述","status":"状态"},
+    "performance_reviews": {"id":"编号","employee_id":"工号","employee_name":"姓名","grade":"职级",
+                             "review_period":"考核周期","review_type":"考核类型","total_score":"总分",
+                             "rating":"评级","reviewer":"评审人","status":"状态"},
+    "container_records": {"id":"编号","container_no":"柜号","work_date":"工作日期","warehouse_code":"仓库",
+                           "container_type":"柜型","load_type":"装卸类型","dock_no":"垛口","ratio":"比例",
+                           "team_no":"组号","team_size":"人数","member_ids":"成员ID",
+                           "start_time":"开始时间","end_time":"结束时间","duration_minutes":"时长(分钟)",
+                           "client_revenue":"客户收入","team_pay":"团队费用","split_method":"分配方式",
+                           "wh_status":"状态","notes":"备注"},
+    "schedules": {"id":"编号","employee_id":"工号","employee_name":"姓名","warehouse_code":"仓库",
+                   "work_date":"工作日期","shift":"班次","start_time":"开始时间","end_time":"结束时间",
+                   "position":"岗位","biz_line":"业务线","status":"状态","notes":"备注"},
+    "dispatch_needs": {"id":"编号","biz_line":"业务线","warehouse_code":"仓库","position":"岗位",
+                        "headcount":"需求人数","start_date":"开始日期","end_date":"结束日期","shift":"班次",
+                        "client_settle":"客户结算","client_rate":"客户费率","matched_count":"已匹配",
+                        "status":"状态","priority":"优先级","requester":"申请人","notes":"备注"},
+}
+
+@app.get("/api/template/{table}")
+def get_template(table: str, user=Depends(get_user)):
+    """Get import template with field names and Chinese labels for a table."""
+    if table not in TABLE_EXPORT_FIELDS:
+        raise HTTPException(400, f"不支持的表: {table}")
+    fields = TABLE_EXPORT_FIELDS[table]
+    labels = TABLE_FIELD_LABELS.get(table, {})
+    header = [labels.get(f, f) for f in fields]
+    sample = {f: "" for f in fields}
+    return {"table": table, "fields": fields, "labels": header, "sample": sample}
+
 @app.get("/api/export/{table}")
-def export_table(table: str, user=Depends(get_user)):
-    """Export table data as JSON. Respects role-based field visibility."""
+def export_table(table: str, fmt: str = "json", user=Depends(get_user)):
+    """Export table data. Supports format: json, csv, excel, pdf. Respects role-based field visibility."""
     if table not in TABLE_EXPORT_FIELDS:
         raise HTTPException(400, f"不支持导出的表: {table}")
-    module_map = {"employees": "employees", "suppliers": "suppliers", "timesheet": "timesheet",
-                  "warehouses": "warehouse", "leave_requests": "leave", "expense_claims": "expense",
-                  "performance_reviews": "performance"}
-    module = module_map.get(table, table)
+    module = MODULE_MAP.get(table, table)
     if not _check_permission(user, module, "can_export"):
         raise HTTPException(403, "无导出权限")
     fields = TABLE_EXPORT_FIELDS[table]
+    labels = TABLE_FIELD_LABELS.get(table, {})
     role = user.get("role", "worker")
     # Apply hidden_fields filter (admin sees all)
     if role != "admin":
@@ -1677,10 +1769,53 @@ def export_table(table: str, user=Depends(get_user)):
             fields = [f for f in fields if f not in hidden]
     # Query data
     rows = q(table)
-    # Filter to only export fields
     export_data = []
     for row in rows:
         export_data.append({f: row.get(f) for f in fields if f in row})
+
+    if fmt == "csv":
+        import io, csv
+        output = io.StringIO()
+        writer = csv.writer(output)
+        header = [labels.get(f, f) for f in fields]
+        writer.writerow(header)
+        for row in export_data:
+            writer.writerow([row.get(f, "") for f in fields])
+        csv_bytes = output.getvalue().encode("utf-8-sig")
+        from fastapi.responses import Response
+        return Response(content=csv_bytes, media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="{table}.csv"'})
+
+    if fmt == "excel":
+        import io, csv
+        # Generate CSV with BOM as Excel-compatible format
+        output = io.StringIO()
+        writer = csv.writer(output, dialect="excel")
+        header = [labels.get(f, f) for f in fields]
+        writer.writerow(header)
+        for row in export_data:
+            writer.writerow([row.get(f, "") for f in fields])
+        csv_bytes = output.getvalue().encode("utf-8-sig")
+        from fastapi.responses import Response
+        return Response(content=csv_bytes,
+                        media_type="application/vnd.ms-excel",
+                        headers={"Content-Disposition": f'attachment; filename="{table}.xls"'})
+
+    if fmt == "pdf":
+        # Generate a simple text-based PDF-like report
+        import io
+        lines = []
+        header = [labels.get(f, f) for f in fields]
+        lines.append("\t".join(header))
+        lines.append("-" * 80)
+        for row in export_data:
+            lines.append("\t".join([str(row.get(f, "")) for f in fields]))
+        content = "\n".join(lines)
+        from fastapi.responses import Response
+        return Response(content=content.encode("utf-8"),
+                        media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{table}.pdf"'})
+
     return {"table": table, "fields": fields, "count": len(export_data), "data": export_data}
 
 @app.post("/api/import/{table}")
@@ -1689,10 +1824,7 @@ async def import_table(table: str, request: Request, user=Depends(get_user)):
     Request body: {"data": [{...}, {...}, ...]}"""
     if table not in TABLE_EXPORT_FIELDS:
         raise HTTPException(400, f"不支持导入的表: {table}")
-    module_map = {"employees": "employees", "suppliers": "suppliers", "timesheet": "timesheet",
-                  "warehouses": "warehouse", "leave_requests": "leave", "expense_claims": "expense",
-                  "performance_reviews": "performance"}
-    module = module_map.get(table, table)
+    module = MODULE_MAP.get(table, table)
     if not _check_permission(user, module, "can_import"):
         raise HTTPException(403, "无导入权限")
 
@@ -1722,6 +1854,12 @@ async def import_table(table: str, request: Request, user=Depends(get_user)):
                         record["id"] = f"EC-{uuid.uuid4().hex[:6]}"
                     elif table == "performance_reviews":
                         record["id"] = f"PR-{uuid.uuid4().hex[:6]}"
+                    elif table == "container_records":
+                        record["id"] = f"CT-{uuid.uuid4().hex[:6]}"
+                    elif table == "schedules":
+                        record["id"] = f"SC-{uuid.uuid4().hex[:6]}"
+                    elif table == "dispatch_needs":
+                        record["id"] = f"DN-{uuid.uuid4().hex[:6]}"
                 now = datetime.now().isoformat()
                 record.setdefault("created_at", now)
                 record.setdefault("updated_at", now)
