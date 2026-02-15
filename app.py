@@ -2591,6 +2591,28 @@ async def update_talent(tid: str, request: Request, user=Depends(get_user)):
     audit_log(user.get("username", ""), "update", "talent_pool", tid, json.dumps(list(data.keys())))
     return {"ok": True}
 
+@app.post("/api/recruit")
+async def create_recruit(request: Request, user=Depends(get_user)):
+    data = await request.json()
+    data["id"] = f"RP-{uuid.uuid4().hex[:6]}"
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("recruit_progress", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建招聘记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "recruit_progress", data["id"], f"候选人: {data.get('candidate_id','')}")
+    return {"ok": True, "id": data["id"]}
+
+@app.put("/api/recruit/{rid}")
+async def update_recruit(rid: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    try:
+        update("recruit_progress", "id", rid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新招聘记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "recruit_progress", rid, json.dumps(list(data.keys())))
+    return {"ok": True}
+
 @app.post("/api/dispatch")
 async def create_dispatch(request: Request, user=Depends(get_user)):
     data = await request.json()

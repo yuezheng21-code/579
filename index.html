@@ -1630,6 +1630,83 @@ const DispatchPage=({t})=>{
           React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
 };
 
+// ══════ Recruit (招聘管理) Page ══════
+const RecruitPage=({t})=>{
+  const[rows,setRows]=useState([]);const[showEdit,setShowEdit]=useState(null);
+  useEffect(()=>{API.get('/api/recruit').then(setRows);},[]);
+  const save=async()=>{
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/recruit',d);}
+    else{await API.put(`/api/recruit/${showEdit.id}`,showEdit);}
+    showToast('保存成功');setShowEdit(null);API.get('/api/recruit').then(setRows);
+  };
+  const handleImport=async(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    const text=await file.text();
+    try{const data=JSON.parse(text);await API.post('/api/import/recruit_progress',{data:Array.isArray(data)?data:data.data||[]});showToast('导入成功');API.get('/api/recruit').then(setRows);}
+    catch(err){showToast('导入失败: '+err.message);}
+    e.target.value='';
+  };
+  const downloadTemplate=async()=>{
+    try{const tpl=await API.get('/api/template/recruit_progress');
+      const blob=new Blob([JSON.stringify({fields:tpl.fields,labels:tpl.labels,data:[tpl.sample]},null,2)],{type:'application/json'});
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='recruit_progress_template.json';a.click();
+    }catch(err){showToast('下载模版失败');}
+  };
+  const handleExport=async(fmt)=>{
+    if(fmt==='json'){const d=await API.get('/api/export/recruit_progress');const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='recruit_progress.json';a.click();}
+    else{window.open(`/api/export/recruit_progress?fmt=${fmt}&token=${localStorage.getItem('token')}`,'_blank');}
+  };
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar',style:{display:'flex',gap:8,flexWrap:'wrap'}},
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,need_id:'',candidate_id:'',source:'',supplier_id:'',recommend_date:new Date().toISOString().slice(0,10),stage:'初筛通过',responsible:'',status:'进行中'})},'新增招聘记录'),
+      React.createElement('button',{className:'btn btn-ghost',onClick:downloadTemplate},'下载导入模版'),
+      React.createElement('label',{className:'btn btn-ghost',style:{cursor:'pointer'}},
+        '批量导入',React.createElement('input',{type:'file',accept:'.json',style:{display:'none'},onChange:handleImport})),
+      React.createElement('select',{className:'btn btn-ghost',style:{appearance:'auto'},onChange:e=>{if(e.target.value){handleExport(e.target.value);e.target.value='';}}},
+        React.createElement('option',{value:''},'导出...'),
+        React.createElement('option',{value:'json'},'JSON'),React.createElement('option',{value:'csv'},'CSV'),
+        React.createElement('option',{value:'excel'},'Excel'),React.createElement('option',{value:'pdf'},'PDF'))),
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['编号','需求ID','候选人ID','来源','供应商ID','推荐日期','阶段','负责人','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,rows.map(r=>React.createElement('tr',{key:r.id},
+          React.createElement('td',null,r.id),React.createElement('td',null,r.need_id||'-'),
+          React.createElement('td',null,r.candidate_id||'-'),React.createElement('td',null,r.source||'-'),
+          React.createElement('td',null,r.supplier_id||'-'),React.createElement('td',null,r.recommend_date||'-'),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.stage||'初筛通过'})),
+          React.createElement('td',null,r.responsible||'-'),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.status||'进行中'})),
+          React.createElement('td',null,React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(r)},'编辑'))))))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增招聘记录':'编辑招聘记录'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'需求ID'),
+            React.createElement('input',{value:showEdit.need_id||'',onChange:e=>setShowEdit({...showEdit,need_id:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'候选人ID'),
+            React.createElement('input',{value:showEdit.candidate_id||'',onChange:e=>setShowEdit({...showEdit,candidate_id:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'来源'),
+            React.createElement('input',{value:showEdit.source||'',onChange:e=>setShowEdit({...showEdit,source:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'供应商ID'),
+            React.createElement('input',{value:showEdit.supplier_id||'',onChange:e=>setShowEdit({...showEdit,supplier_id:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'推荐日期'),
+            React.createElement('input',{type:'date',value:showEdit.recommend_date||'',onChange:e=>setShowEdit({...showEdit,recommend_date:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'阶段'),
+            React.createElement('select',{value:showEdit.stage||'初筛通过',onChange:e=>setShowEdit({...showEdit,stage:e.target.value})},
+              ['初筛通过','面试中','面试通过','录用确认','已入职','已淘汰'].map(s=>React.createElement('option',{key:s,value:s},s))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'负责人'),
+            React.createElement('input',{value:showEdit.responsible||'',onChange:e=>setShowEdit({...showEdit,responsible:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'状态'),
+            React.createElement('select',{value:showEdit.status||'进行中',onChange:e=>setShowEdit({...showEdit,status:e.target.value})},
+              ['进行中','已完成','已取消'].map(s=>React.createElement('option',{key:s,value:s},s))))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
+};
+
 // ══════ Admin (Permission Management) Page ══════
 const AdminPage=({t,user})=>{
   const[perms,setPerms]=useState([]);const[roles,setRoles]=useState([]);
@@ -2087,6 +2164,7 @@ const MENU = [
   ]},
   {group:'人事',items:[
     {key:'register',icon:'📝',label:'员工申报',roles:['admin','hr','mgr']},
+    {key:'recruit',icon:'📋',label:'招聘管理'},
     {key:'files',icon:'📁',label:'人员档案'},
     {key:'docs',icon:'📚',label:'企业文献'},
     {key:'leave',icon:'🏖️',label:'假期管理'},
@@ -2124,7 +2202,7 @@ const App=()=>{
     mypage:MyPage, accounts:AccountPage, whsalary:WHSalaryPage, payroll:PayrollPreviewPage,
     warehouse:WarehousePage, docs:DocsPage,
     suppliers:SuppliersPage, container:ContainerPage, schedule:SchedulePage,
-    dispatch:DispatchPage, admin:AdminPage,
+    dispatch:DispatchPage, recruit:RecruitPage, admin:AdminPage,
     orgchart:OrgChartPage, safety:SafetyPage, register:RegisterPage, compliance:CompliancePage,
     regions:RegionPage,
   };
