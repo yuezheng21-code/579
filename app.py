@@ -187,18 +187,11 @@ def audit_log(username: str, action: str, resource_type: str, resource_id: str, 
     """记录审计日志"""
     try:
         db = database.get_db()
-        log_data = {
-            "id": f"AL-{uuid.uuid4().hex[:8]}",
-            "username": username,
-            "action": action,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "details": details,
-            "timestamp": datetime.now().isoformat()
-        }
-        cols = ",".join(log_data.keys())
-        phs = ",".join(["?"]*len(log_data))
-        db.execute(f"INSERT INTO audit_logs({cols}) VALUES({phs})", list(log_data.values()))
+        # Use the actual schema of audit_logs table
+        db.execute("""
+            INSERT INTO audit_logs (username, action, target_table, target_id, new_value)
+            VALUES (?, ?, ?, ?, ?)
+        """, (username, action, resource_type, resource_id, details))
         db.commit()
         db.close()
     except Exception:
@@ -207,9 +200,30 @@ def audit_log(username: str, action: str, resource_type: str, resource_id: str, 
 
 # ── Auth ──
 class LoginReq(BaseModel):
-    username: str; password: str
+    username: str
+    password: str
+
 class PinReq(BaseModel):
     pin: str
+
+class AccountGenerateReq(BaseModel):
+    employee_id: str
+    role: str = "worker"
+
+class BatchAccountGenerateReq(BaseModel):
+    employee_ids: list[str]
+    role: str = "worker"
+
+class PasswordResetReq(BaseModel):
+    username: str
+
+class TimesheetCreateReq(BaseModel):
+    employee_id: str
+    work_date: str
+    warehouse_code: str
+    hours: float = 0
+    grade: Optional[str] = None
+    position: Optional[str] = "库内"
 
 @app.post("/api/login")
 def login(req: LoginReq):
@@ -555,6 +569,24 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
     data = await request.json()
     if "id" not in data: data["id"] = f"WT-{uuid.uuid4().hex[:8]}"
 
+    # 检查是否已存在相同的工时记录
+    employee_id = data.get("employee_id")
+    work_date = data.get("work_date")
+    warehouse_code = data.get("warehouse_code")
+    
+    if employee_id and work_date and warehouse_code:
+        db = database.get_db()
+        existing = db.execute("""
+            SELECT id FROM timesheet 
+            WHERE employee_id=? AND work_date=? AND warehouse_code=?
+        """, (employee_id, work_date, warehouse_code)).fetchone()
+        
+        if existing:
+            db.close()
+            raise HTTPException(400, f"该员工在该日期和仓库已有工时记录 (ID: {existing['id']})")
+        
+        db.close()
+
     # 根据仓库获取薪资配置
     wh = data.get("warehouse_code")
     grade = data.get("grade")
@@ -626,11 +658,18 @@ def get_containers(user=Depends(get_user)): return q("container_records")
 async def create_container(request: Request, user=Depends(get_user)):
     data = await request.json()
     if "id" not in data: data["id"] = f"CT-{uuid.uuid4().hex[:6]}"
+    
+    # Calculate duration with validation
     if data.get("start_time") and data.get("end_time"):
-        sh,sm = map(int, data["start_time"].split(":")); eh,em = map(int, data["end_time"].split(":"))
-        mins = (eh*60+em)-(sh*60+sm)
-        if mins < 0: mins += 1440
-        data["duration_minutes"] = mins
+        try:
+            sh, sm = map(int, data["start_time"].split(":"))
+            eh, em = map(int, data["end_time"].split(":"))
+            mins = (eh*60+em)-(sh*60+sm)
+            if mins < 0: mins += 1440
+            data["duration_minutes"] = mins
+        except (ValueError, AttributeError):
+            # Invalid time format, skip duration calculation
+            pass
 
     # 根据仓库获取装卸柜薪资
     wh = data.get("warehouse_code")
@@ -642,7 +681,7 @@ async def create_container(request: Request, user=Depends(get_user)):
         if wh_info:
             rate_map = {"20GP": "rate_20gp", "40GP": "rate_40gp", "45HC": "rate_45hc"}
             rate_col = rate_map.get(container_type, "rate_40gp")
-            data["client_revenue"] = wh_info[rate_col] if wh_info[rate_col] else 0
+            data["client_revenue"] = wh_info[rate_col] if wh_info.get(rate_col) else 0
         db.close()
 
     insert("container_records", data); return {"ok": True}
