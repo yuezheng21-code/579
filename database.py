@@ -95,7 +95,15 @@ class CursorWrapper:
 
 def _now_expr():
     """Return the appropriate SQL expression for current timestamp"""
-    return "CURRENT_TIMESTAMP" if USE_POSTGRES else "datetime('now')"
+    if USE_POSTGRES:
+        return "CURRENT_TIMESTAMP"
+    else:
+        # SQLite requires TEXT type and parentheses for datetime function
+        return "(datetime('now'))"
+
+def _timestamp_type():
+    """Return the appropriate timestamp column type"""
+    return "TIMESTAMP" if USE_POSTGRES else "TEXT"
 
 def _autoincrement():
     """Return the appropriate auto-increment syntax"""
@@ -106,6 +114,7 @@ def init_db():
     conn = db_wrapper.conn  # Get the underlying connection
     c = conn.cursor()
     now_expr = _now_expr()
+    ts_type = _timestamp_type()
     autoinc = _autoincrement()
     tables = [
     # ── Grade Levels P0-P9/M1-M5 ──
@@ -117,7 +126,7 @@ def init_db():
         eval_criteria TEXT, promotion_path TEXT, promotion_conditions TEXT,
         perf_dimensions TEXT, bonus_eligible INTEGER DEFAULT 1,
         adjust_pct_min REAL DEFAULT 0, adjust_pct_max REAL DEFAULT 0,
-        description TEXT, created_at TIMESTAMP DEFAULT {now_expr})""",
+        description TEXT, created_at {ts_type} DEFAULT {now_expr})""",
     # ── Grade Evaluations ──
     f"""CREATE TABLE IF NOT EXISTS grade_evaluations (
         id TEXT PRIMARY KEY, employee_id TEXT, current_grade TEXT, target_grade TEXT,
@@ -126,7 +135,7 @@ def init_db():
         result TEXT DEFAULT '待评定', effective_date TEXT,
         salary_before REAL, salary_after REAL, comments TEXT,
         approved_by TEXT, status TEXT DEFAULT '待审批',
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── Promotion Applications ──
     f"""CREATE TABLE IF NOT EXISTS promotion_applications (
         id TEXT PRIMARY KEY, employee_id TEXT, employee_name TEXT,
@@ -134,7 +143,7 @@ def init_db():
         reason TEXT, achievements TEXT, recommender TEXT,
         status TEXT DEFAULT '已提交', reviewer TEXT, review_date TEXT, review_comments TEXT,
         approver TEXT, approve_date TEXT, effective_date TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── Bonus Applications ──
     f"""CREATE TABLE IF NOT EXISTS bonus_applications (
         id TEXT PRIMARY KEY, employee_id TEXT, employee_name TEXT,
@@ -144,7 +153,7 @@ def init_db():
         reviewer TEXT, review_date TEXT, review_status TEXT DEFAULT '待审核',
         approver TEXT, approve_date TEXT, final_status TEXT DEFAULT '待审批',
         paid INTEGER DEFAULT 0, paid_date TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── Performance Reviews ──
     f"""CREATE TABLE IF NOT EXISTS performance_reviews (
         id TEXT PRIMARY KEY, employee_id TEXT, employee_name TEXT,
@@ -152,7 +161,7 @@ def init_db():
         dimensions TEXT, scores TEXT, total_score REAL DEFAULT 0,
         rating TEXT, reviewer TEXT, review_date TEXT,
         employee_comments TEXT, reviewer_comments TEXT,
-        status TEXT DEFAULT '待评估', created_at TIMESTAMP DEFAULT {now_expr})""",
+        status TEXT DEFAULT '待评估', created_at {ts_type} DEFAULT {now_expr})""",
     # ── Quotation Templates ──
     f"""CREATE TABLE IF NOT EXISTS quotation_templates (
         id TEXT PRIMARY KEY, biz_type TEXT, service_type TEXT,
@@ -162,7 +171,7 @@ def init_db():
         weekend_surcharge REAL DEFAULT 0, holiday_surcharge REAL DEFAULT 0,
         skill_surcharge TEXT, min_hours REAL DEFAULT 0,
         valid_from TEXT, valid_to TEXT, adjust_rules TEXT,
-        status TEXT DEFAULT '生效中', created_at TIMESTAMP DEFAULT {now_expr})""",
+        status TEXT DEFAULT '生效中', created_at {ts_type} DEFAULT {now_expr})""",
     # ── Quotation Records ──
     f"""CREATE TABLE IF NOT EXISTS quotation_records (
         id TEXT PRIMARY KEY, client_name TEXT, client_contact TEXT,
@@ -176,7 +185,7 @@ def init_db():
         quoted_by TEXT, quoted_by_grade TEXT,
         review_status TEXT DEFAULT '待审核', approve_status TEXT DEFAULT '待审批',
         client_response TEXT DEFAULT '待回复', contract_no TEXT, notes TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── Employee Files ──
     f"""CREATE TABLE IF NOT EXISTS employee_files (
         id TEXT PRIMARY KEY, employee_id TEXT NOT NULL,
@@ -184,7 +193,7 @@ def init_db():
         file_type TEXT, file_size INTEGER DEFAULT 0,
         description TEXT, upload_date TEXT, uploaded_by TEXT,
         stage TEXT DEFAULT '在职', tags TEXT, confidential INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── Leave Types ──
     """CREATE TABLE IF NOT EXISTS leave_types (
         code TEXT PRIMARY KEY, name_zh TEXT, name_en TEXT, name_de TEXT,
@@ -209,7 +218,7 @@ def init_db():
         apply_date TEXT, status TEXT DEFAULT '已提交',
         reviewer TEXT, review_date TEXT, review_comments TEXT,
         approver TEXT, approve_date TEXT, cancel_reason TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── Expense Claims ──
     f"""CREATE TABLE IF NOT EXISTS expense_claims (
         id TEXT PRIMARY KEY, employee_id TEXT, employee_name TEXT,
@@ -222,7 +231,7 @@ def init_db():
         reviewer TEXT, review_date TEXT, review_comments TEXT,
         approver TEXT, approve_date TEXT, approve_comments TEXT,
         paid INTEGER DEFAULT 0, paid_date TEXT, paid_by TEXT, notes TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── Employees ──
     f"""CREATE TABLE IF NOT EXISTS employees (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, email TEXT,
@@ -237,16 +246,15 @@ def init_db():
         tax_mode TEXT DEFAULT '我方报税', tax_no TEXT, tax_id TEXT, tax_class TEXT DEFAULT '1',
         ssn TEXT, iban TEXT, health_insurance TEXT,
         languages TEXT, special_skills TEXT,
-        -- 新增字段: 家庭信息和副业
-        family_name TEXT,              -- 姓 (Last name)
-        given_name TEXT,               -- 名 (First name)
-        marital_status TEXT,           -- 婚姻状况
-        children_count INTEGER DEFAULT 0, -- 子女数量
-        secondary_job INTEGER DEFAULT 0,  -- 是否有副业 (0 无, 1 有)
+        family_name TEXT,
+        given_name TEXT,
+        marital_status TEXT,
+        children_count INTEGER DEFAULT 0,
+        secondary_job INTEGER DEFAULT 0,
         annual_leave_days REAL DEFAULT 20, sick_leave_days REAL DEFAULT 30,
         status TEXT DEFAULT '在职', join_date TEXT, leave_date TEXT, pin TEXT,
         file_folder TEXT, has_account INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT {now_expr}, updated_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr}, updated_at {ts_type} DEFAULT {now_expr})""",
     # ── Suppliers ──
     f"""CREATE TABLE IF NOT EXISTS suppliers (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT DEFAULT '人力供应商',
@@ -255,7 +263,7 @@ def init_db():
         contact_name TEXT, contact_phone TEXT, contact_email TEXT, address TEXT,
         tax_handle TEXT DEFAULT '供应商自行报税',
         status TEXT DEFAULT '合作中', rating TEXT DEFAULT 'B', notes TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr}, updated_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr}, updated_at {ts_type} DEFAULT {now_expr})""",
     # ── Warehouses ──
     f"""CREATE TABLE IF NOT EXISTS warehouses (
         code TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT,
@@ -264,7 +272,7 @@ def init_db():
         rate_20gp REAL DEFAULT 150, rate_40gp REAL DEFAULT 280, rate_45hc REAL DEFAULT 330,
         unload_20gp REAL DEFAULT 150, unload_40gp REAL DEFAULT 280, unload_45hc REAL DEFAULT 330,
         emp_cols TEXT, ts_cols TEXT, export_freq TEXT DEFAULT 'Monthly', export_lang TEXT DEFAULT 'zh',
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── NEW: Warehouse Salary Config - 仓库薪资配置表 ──
     f"""CREATE TABLE IF NOT EXISTS warehouse_salary_config (
         id TEXT PRIMARY KEY,
@@ -286,8 +294,8 @@ def init_db():
         effective_from TEXT,
         effective_to TEXT,
         notes TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr},
-        updated_at TIMESTAMP DEFAULT {now_expr},
+        created_at {ts_type} DEFAULT {now_expr},
+        updated_at {ts_type} DEFAULT {now_expr},
         UNIQUE(warehouse_code, grade, position_type))""",
     # ── Timesheet ──
     f"""CREATE TABLE IF NOT EXISTS timesheet (
@@ -304,7 +312,7 @@ def init_db():
         wh_approver TEXT, wh_approve_time TEXT,
         fin_approver TEXT, fin_approve_time TEXT,
         booked INTEGER DEFAULT 0, notes TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr}, updated_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr}, updated_at {ts_type} DEFAULT {now_expr})""",
     # ── Container Records ──
     f"""CREATE TABLE IF NOT EXISTS container_records (
         id TEXT PRIMARY KEY, container_no TEXT, work_date TEXT,
@@ -319,7 +327,7 @@ def init_db():
         photo_empty TEXT, paper_photo TEXT,
         wh_status TEXT DEFAULT '待审核', wh_data_hrs REAL, wh_data_ok INTEGER DEFAULT 0,
         synced_to_timesheet INTEGER DEFAULT 0, notes TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     # ── Other tables ──
     f"""CREATE TABLE IF NOT EXISTS talent_pool (
         id TEXT PRIMARY KEY, name TEXT, phone TEXT,
@@ -327,32 +335,32 @@ def init_db():
         nationality TEXT, age INTEGER, position_type TEXT,
         languages TEXT, certificates TEXT,
         pool_status TEXT DEFAULT '储备中', file_folder TEXT,
-        notes TEXT, created_at TIMESTAMP DEFAULT {now_expr})""",
+        notes TEXT, created_at {ts_type} DEFAULT {now_expr})""",
     f"""CREATE TABLE IF NOT EXISTS schedules (
         id TEXT PRIMARY KEY, employee_id TEXT, employee_name TEXT,
         warehouse_code TEXT, work_date TEXT,
         shift TEXT DEFAULT '白班', start_time TEXT, end_time TEXT,
         position TEXT, biz_line TEXT, status TEXT DEFAULT '已排班',
         actual_in TEXT, actual_out TEXT, notes TEXT,
-        created_by TEXT, created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_by TEXT, created_at {ts_type} DEFAULT {now_expr})""",
     f"""CREATE TABLE IF NOT EXISTS dispatch_needs (
         id TEXT PRIMARY KEY, biz_line TEXT, warehouse_code TEXT,
         position TEXT, headcount INTEGER DEFAULT 1,
         start_date TEXT, end_date TEXT, shift TEXT,
         client_settle TEXT, client_rate REAL, matched_count INTEGER DEFAULT 0,
         status TEXT DEFAULT '待处理', priority TEXT DEFAULT '中',
-        requester TEXT, notes TEXT, created_at TIMESTAMP DEFAULT {now_expr})""",
+        requester TEXT, notes TEXT, created_at {ts_type} DEFAULT {now_expr})""",
     f"""CREATE TABLE IF NOT EXISTS recruit_progress (
         id TEXT PRIMARY KEY, need_id TEXT, candidate_id TEXT,
         source TEXT, supplier_id TEXT, recommend_date TEXT,
         stage TEXT DEFAULT '初筛通过', responsible TEXT,
-        status TEXT DEFAULT '进行中', created_at TIMESTAMP DEFAULT {now_expr})""",
+        status TEXT DEFAULT '进行中', created_at {ts_type} DEFAULT {now_expr})""",
     f"""CREATE TABLE IF NOT EXISTS users (
         username TEXT PRIMARY KEY, password_hash TEXT NOT NULL,
         display_name TEXT, role TEXT DEFAULT 'worker',
         avatar TEXT, color TEXT DEFAULT '#4f6ef7',
         supplier_id TEXT, warehouse_code TEXT, biz_line TEXT, employee_id TEXT,
-        active INTEGER DEFAULT 1, created_at TIMESTAMP DEFAULT {now_expr})""",
+        active INTEGER DEFAULT 1, created_at {ts_type} DEFAULT {now_expr})""",
     f"""CREATE TABLE IF NOT EXISTS permission_overrides (
         id {autoinc},
         role TEXT NOT NULL, module TEXT NOT NULL,
@@ -360,11 +368,11 @@ def init_db():
         can_edit INTEGER DEFAULT 0, can_delete INTEGER DEFAULT 0,
         can_export INTEGER DEFAULT 0, can_approve INTEGER DEFAULT 0,
         hidden_fields TEXT DEFAULT '',
-        updated_by TEXT, updated_at TIMESTAMP DEFAULT {now_expr},
+        updated_by TEXT, updated_at {ts_type} DEFAULT {now_expr},
         UNIQUE(role, module))""",
     f"""CREATE TABLE IF NOT EXISTS audit_logs (
         id {autoinc},
-        timestamp TIMESTAMP DEFAULT {now_expr},
+        timestamp {ts_type} DEFAULT {now_expr},
         username TEXT, user_display TEXT,
         action TEXT, target_table TEXT, target_id TEXT,
         old_value TEXT, new_value TEXT, ip_address TEXT)""",
@@ -372,13 +380,13 @@ def init_db():
         id TEXT PRIMARY KEY, channel TEXT DEFAULT 'system',
         from_name TEXT, content TEXT, msg_type TEXT DEFAULT 'info',
         matched INTEGER DEFAULT 0, ref_id TEXT,
-        timestamp TIMESTAMP DEFAULT {now_expr})""",
+        timestamp {ts_type} DEFAULT {now_expr})""",
     f"""CREATE TABLE IF NOT EXISTS dispatch_transfers (
         id TEXT PRIMARY KEY, employee_id TEXT, dispatch_date TEXT,
         start_date TEXT, end_date TEXT, from_wh TEXT, to_wh TEXT,
         transfer_type TEXT DEFAULT '临时支援', biz_line TEXT,
         approver TEXT, reason TEXT, status TEXT DEFAULT '待审批', notes TEXT,
-        created_at TIMESTAMP DEFAULT {now_expr})""",
+        created_at {ts_type} DEFAULT {now_expr})""",
     ]
     for sql in tables:
         c.execute(sql)
