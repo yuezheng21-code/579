@@ -931,6 +931,71 @@ async def test_update_timesheet(auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_create_and_update_container(auth_headers):
+    """Test creating and updating a container record."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create a container record
+        r = await ac.post("/api/containers", headers=auth_headers,
+                          json={"container_no": "TEST-CT-001", "work_date": "2025-01-15",
+                                "warehouse_code": "UNA", "container_type": "40GP",
+                                "load_type": "卸柜", "team_size": 2,
+                                "start_time": "08:00", "end_time": "09:30"})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        # Get containers to find the one we just created
+        r = await ac.get("/api/containers", headers=auth_headers)
+        assert r.status_code == 200
+        containers = r.json()
+        created = [c for c in containers if c.get("container_no") == "TEST-CT-001"]
+        assert len(created) == 1
+        cid = created[0]["id"]
+        assert created[0]["duration_minutes"] == 90
+
+        # Update the container record
+        r = await ac.put(f"/api/containers/{cid}", headers=auth_headers,
+                         json={"team_size": 4, "notes": "测试更新"})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        # Verify the update
+        r = await ac.get("/api/containers", headers=auth_headers)
+        containers = r.json()
+        updated = [c for c in containers if c["id"] == cid]
+        assert len(updated) == 1
+        assert updated[0]["team_size"] == 4
+        assert updated[0]["notes"] == "测试更新"
+
+
+@pytest.mark.asyncio
+async def test_update_container_with_time_recalculation(auth_headers):
+    """Test that updating container times recalculates duration."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create a container record
+        r = await ac.post("/api/containers", headers=auth_headers,
+                          json={"container_no": "TEST-CT-002", "work_date": "2025-01-16",
+                                "warehouse_code": "UNA", "container_type": "20GP",
+                                "load_type": "装柜", "team_size": 3,
+                                "start_time": "10:00", "end_time": "11:00"})
+        assert r.status_code == 200
+
+        r = await ac.get("/api/containers", headers=auth_headers)
+        created = [c for c in r.json() if c.get("container_no") == "TEST-CT-002"]
+        cid = created[0]["id"]
+
+        # Update with new times
+        r = await ac.put(f"/api/containers/{cid}", headers=auth_headers,
+                         json={"start_time": "08:00", "end_time": "10:30"})
+        assert r.status_code == 200
+
+        r = await ac.get("/api/containers", headers=auth_headers)
+        updated = [c for c in r.json() if c["id"] == cid]
+        assert updated[0]["duration_minutes"] == 150
+
+
+@pytest.mark.asyncio
 async def test_create_talent(auth_headers):
     """Test creating a talent pool record."""
     transport = ASGITransport(app=app)
