@@ -2266,3 +2266,413 @@ async def test_editable_fields_enforcement(auth_headers):
     assert emp["base_salary"] != 99999
     assert emp["status"] == "在职"
     assert emp["position"] == "装卸"
+
+
+# ── Grade-Based Permissions Tests ──
+
+
+def _link_user_to_employee(username, employee_id):
+    """Helper: link a user account to an employee record."""
+    db = database.get_db()
+    db.execute("UPDATE users SET employee_id=? WHERE username=?", (employee_id, username))
+    db.commit()
+    db.close()
+
+
+def _set_employee_grade(employee_id, grade, warehouse=None):
+    """Helper: set employee grade and optionally warehouse."""
+    db = database.get_db()
+    if warehouse:
+        db.execute("UPDATE employees SET grade=?, primary_wh=? WHERE id=?", (grade, warehouse, employee_id))
+    else:
+        db.execute("UPDATE employees SET grade=? WHERE id=?", (grade, employee_id))
+    db.commit()
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_warehouse_regions_seeded():
+    """Warehouses should have region column populated."""
+    db = database.get_db()
+    whs = db.execute("SELECT code, region FROM warehouses WHERE region IS NOT NULL AND region != ''").fetchall()
+    db.close()
+    regions = {w["region"] for w in whs}
+    assert "鲁尔西" in regions
+    assert "鲁尔东" in regions
+    assert "南战区" in regions
+    assert len(whs) == 5  # All 5 warehouses have regions
+
+
+@pytest.mark.asyncio
+async def test_get_regions_endpoint(auth_headers):
+    """GET /api/regions should return regions with warehouses."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/regions", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 3  # 3 regions
+    region_names = {d["name"] for d in data}
+    assert "鲁尔西" in region_names
+    assert "鲁尔东" in region_names
+    assert "南战区" in region_names
+    # Check 鲁尔西 has UNA and DHL
+    ruhr_west = [d for d in data if d["name"] == "鲁尔西"][0]
+    wh_codes = {w["code"] for w in ruhr_west["warehouses"]}
+    assert "UNA" in wh_codes
+    assert "DHL" in wh_codes
+
+
+@pytest.mark.asyncio
+async def test_grade_permissions_endpoint_admin(auth_headers):
+    """Admin should get full grade permissions."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/grade", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["data_scope"] == "all"
+    assert data["can_dispatch_request"] is True
+    assert data["can_transfer_request"] is True
+    assert data["salary_scope"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_grade_permissions_endpoint_worker():
+    """Worker with P2 grade should have self_only scope."""
+    # Link worker1 to YB-001 (P2 grade)
+    _link_user_to_employee("worker1", "YB-001")
+    from app import make_token
+    token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/grade", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["grade"] == "P2"
+    assert data["data_scope"] == "self_only"
+    assert data["can_dispatch_request"] is False
+    assert data["can_transfer_request"] is False
+    assert data["salary_scope"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_p2_worker_sees_only_own_timesheet():
+    """P0-P2 worker should only see their own timesheet entries."""
+    _link_user_to_employee("worker1", "YB-001")
+    from app import make_token
+    token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/timesheet", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    # All returned timesheet entries should be for YB-001
+    for entry in data:
+        assert entry["employee_id"] == "YB-001"
+
+
+@pytest.mark.asyncio
+async def test_p2_worker_sees_only_own_schedules():
+    """P0-P2 worker should only see their own schedule entries."""
+    _link_user_to_employee("worker1", "YB-001")
+    from app import make_token
+    token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/schedules", headers=headers)
+    assert r.status_code == 200
+    # Should return only own schedules (or empty)
+    data = r.json()
+    for entry in data:
+        assert entry["employee_id"] == "YB-001"
+
+
+@pytest.mark.asyncio
+async def test_p4_mgr_sees_own_warehouse_timesheet():
+    """P4 (组长) with mgr role should see timesheet for their warehouse only."""
+    # YB-010 is P4 at EMR warehouse
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P4", "EMR")
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/timesheet", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    # All entries should be from EMR warehouse
+    for entry in data:
+        assert entry["warehouse_code"] == "EMR"
+
+
+@pytest.mark.asyncio
+async def test_p5_can_submit_dispatch_request():
+    """P5+ should be able to submit personnel requests."""
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P5", "EMR")
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch", headers=headers,
+                          json={"warehouse_code": "EMR", "position": "库内", "headcount": 3})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_p4_cannot_submit_dispatch_request():
+    """P4 (below P5) should NOT be able to submit personnel requests."""
+    _link_user_to_employee("worker1", "YB-010")
+    _set_employee_grade("YB-010", "P4", "EMR")
+    from app import make_token
+    token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch", headers=headers,
+                          json={"warehouse_code": "EMR", "position": "库内", "headcount": 2})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_always_submit_dispatch(auth_headers):
+    """Admin can always submit dispatch requests regardless of grade."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch", headers=auth_headers,
+                          json={"warehouse_code": "UNA", "position": "库内", "headcount": 5})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_p7_can_create_dispatch_transfer():
+    """P7 (驻仓经理) should be able to submit warehouse transfer requests."""
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P7", "EMR")
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch-transfers", headers=headers,
+                          json={"employee_id": "YB-001", "from_wh": "UNA", "to_wh": "EMR",
+                                "transfer_type": "临时支援", "reason": "人力需求"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert "id" in data
+
+
+@pytest.mark.asyncio
+async def test_p6_cannot_create_dispatch_transfer():
+    """P6 (below P7) should NOT be able to submit warehouse transfer requests."""
+    _link_user_to_employee("worker1", "YB-010")
+    _set_employee_grade("YB-010", "P6", "EMR")
+    from app import make_token
+    token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch-transfers", headers=headers,
+                          json={"employee_id": "YB-001", "from_wh": "UNA", "to_wh": "EMR",
+                                "transfer_type": "临时支援", "reason": "测试"})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_dispatch_transfer_creates_audit_log():
+    """Creating a dispatch transfer should produce an audit log entry."""
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P7", "EMR")
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch-transfers", headers=headers,
+                          json={"employee_id": "YB-002", "from_wh": "DHL", "to_wh": "EMR",
+                                "transfer_type": "长期调仓", "reason": "岗位需求"})
+    assert r.status_code == 200
+    transfer_id = r.json()["id"]
+    # Check audit log
+    db = database.get_db()
+    log = db.execute("SELECT * FROM audit_logs WHERE target_table='dispatch_transfers' AND target_id=?",
+                     (transfer_id,)).fetchone()
+    db.close()
+    assert log is not None
+    assert "调仓" in log["new_value"]
+
+
+@pytest.mark.asyncio
+async def test_get_dispatch_transfers(auth_headers):
+    """GET /api/dispatch-transfers should return transfer records."""
+    # Create a transfer as admin first
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch-transfers", headers=auth_headers,
+                          json={"employee_id": "YB-001", "from_wh": "UNA", "to_wh": "DHL",
+                                "transfer_type": "临时支援", "reason": "测试"})
+    assert r.status_code == 200
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/dispatch-transfers", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) >= 1
+
+
+@pytest.mark.asyncio
+async def test_p7_salary_own_warehouse_only():
+    """P7 should only be able to create salary config for own warehouse."""
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P7", "EMR")
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    # Should succeed for own warehouse (EMR)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouse-salary-config", headers=headers,
+                          json={"warehouse_code": "EMR", "grade": "P1", "position_type": "测试",
+                                "hourly_rate": 12.0})
+    assert r.status_code == 200
+    # Should fail for other warehouse
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouse-salary-config", headers=headers,
+                          json={"warehouse_code": "UNA", "grade": "P1", "position_type": "测试",
+                                "hourly_rate": 12.0})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_p8_salary_regional_scope():
+    """P8 (区域经理) should be able to modify salary config for regional warehouses only."""
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P8", "EMR")  # EMR is in 南战区
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    # Should succeed for own region (南战区 - EMR is the only one)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouse-salary-config", headers=headers,
+                          json={"warehouse_code": "EMR", "grade": "P1", "position_type": "区域测试",
+                                "hourly_rate": 13.0})
+    assert r.status_code == 200
+    # Should fail for warehouse in another region (UNA is in 鲁尔西)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouse-salary-config", headers=headers,
+                          json={"warehouse_code": "UNA", "grade": "P1", "position_type": "区域测试",
+                                "hourly_rate": 13.0})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_p4_salary_suggest_only():
+    """P4-P6 should not be able to create/modify salary config (suggest only)."""
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P5", "EMR")
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouse-salary-config", headers=headers,
+                          json={"warehouse_code": "EMR", "grade": "P1", "position_type": "测试",
+                                "hourly_rate": 12.0})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_p9_salary_all_scope():
+    """P9 (运营总监) should be able to modify salary config for all warehouses."""
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P9", "EMR")
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    # Should succeed for any warehouse
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouse-salary-config", headers=headers,
+                          json={"warehouse_code": "UNA", "grade": "P1", "position_type": "P9测试",
+                                "hourly_rate": 14.0})
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_p8_regional_timesheet_scope():
+    """P8 (区域经理) should see timesheet for all warehouses in their region."""
+    _link_user_to_employee("mgr579", "YB-010")
+    _set_employee_grade("YB-010", "P8", "W579")  # W579 is in 鲁尔东 region
+    from app import make_token
+    token = make_token("mgr579", "mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/timesheet", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    # Should only see W579 and CMA (both in 鲁尔东)
+    allowed_whs = {"W579", "CMA"}
+    for entry in data:
+        assert entry["warehouse_code"] in allowed_whs, \
+            f"P8 in 鲁尔东 should not see timesheet for {entry['warehouse_code']}"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_transfer_validation():
+    """POST /api/dispatch-transfers should validate required fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Missing employee_id
+        from app import make_token
+        token = make_token("admin", "admin")
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await ac.post("/api/dispatch-transfers", headers=headers,
+                          json={"from_wh": "UNA", "to_wh": "DHL"})
+    assert r.status_code == 400
+
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Missing warehouses
+        r = await ac.post("/api/dispatch-transfers", headers=headers,
+                          json={"employee_id": "YB-001"})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_grade_permissions_config():
+    """Verify GRADE_PERMISSIONS config covers P0-P9."""
+    from app import GRADE_PERMISSIONS
+    for grade in ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"]:
+        assert grade in GRADE_PERMISSIONS
+        gp = GRADE_PERMISSIONS[grade]
+        assert "data_scope" in gp
+        assert "can_dispatch_request" in gp
+        assert "can_transfer_request" in gp
+        assert "salary_scope" in gp
+    # P0-P2 should be self_only
+    assert GRADE_PERMISSIONS["P0"]["data_scope"] == "self_only"
+    assert GRADE_PERMISSIONS["P2"]["data_scope"] == "self_only"
+    # P4-P6 should be own_warehouse
+    assert GRADE_PERMISSIONS["P4"]["data_scope"] == "own_warehouse"
+    assert GRADE_PERMISSIONS["P6"]["data_scope"] == "own_warehouse"
+    # P7 should be own_warehouse
+    assert GRADE_PERMISSIONS["P7"]["data_scope"] == "own_warehouse"
+    # P8 should be regional
+    assert GRADE_PERMISSIONS["P8"]["data_scope"] == "regional"
+    # P9 should be all
+    assert GRADE_PERMISSIONS["P9"]["data_scope"] == "all"
+    # P5+ can dispatch
+    assert GRADE_PERMISSIONS["P4"]["can_dispatch_request"] is False
+    assert GRADE_PERMISSIONS["P5"]["can_dispatch_request"] is True
+    # P7+ can transfer
+    assert GRADE_PERMISSIONS["P6"]["can_transfer_request"] is False
+    assert GRADE_PERMISSIONS["P7"]["can_transfer_request"] is True
