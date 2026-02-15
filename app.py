@@ -10,8 +10,6 @@ from typing import Optional
 import database
 import re
 
-database.init_db(); database.seed_data(); database.ensure_demo_users()
-
 app = FastAPI(title="渊博579 HR V6")
 # CORS: Restrict to specific origins in production. Use "*" only for development.
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
@@ -27,6 +25,17 @@ UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
+
+@app.on_event("startup")
+def on_startup():
+    try:
+        database.init_db()
+        database.seed_data()
+        database.ensure_demo_users()
+    except Exception as e:
+        import traceback
+        print(f"⚠️ Database initialization error: {e}")
+        traceback.print_exc()
 
 import hashlib, time, hmac, base64
 
