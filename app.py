@@ -963,6 +963,25 @@ async def create_container(request: Request, user=Depends(get_user)):
     audit_log(user.get("username", ""), "create", "container_records", data["id"], f"柜号: {data.get('container_no','')}")
     return {"ok": True}
 
+@app.put("/api/containers/{cid}")
+async def update_container(cid: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    if data.get("start_time") and data.get("end_time"):
+        try:
+            sh, sm = map(int, data["start_time"].split(":"))
+            eh, em = map(int, data["end_time"].split(":"))
+            mins = (eh*60+em)-(sh*60+sm)
+            if mins < 0: mins += 1440
+            data["duration_minutes"] = mins
+        except (ValueError, AttributeError):
+            raise HTTPException(400, f"无效的时间格式: {data.get('start_time')} - {data.get('end_time')}")
+    try:
+        update("container_records", "id", cid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新装卸柜记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "container_records", cid, json.dumps(list(data.keys())))
+    return {"ok": True}
+
 # ── Grades ──
 @app.get("/api/grades")
 def get_grades(user=Depends(get_user)): return q("grade_levels", order="series ASC, level ASC")
