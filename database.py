@@ -294,6 +294,25 @@ def init_db():
         description TEXT,
         updated_by TEXT,
         updated_at TEXT DEFAULT (datetime('now')))""",
+    # ── Job Positions - 岗位定义 (可自行设定，关联到花名册) ──
+    """CREATE TABLE IF NOT EXISTS job_positions (
+        code TEXT PRIMARY KEY,
+        title_zh TEXT NOT NULL,
+        title_en TEXT DEFAULT '',
+        title_de TEXT DEFAULT '',
+        category TEXT DEFAULT '运营',
+        series TEXT DEFAULT 'P',
+        grade_code TEXT DEFAULT '',
+        default_role TEXT DEFAULT 'worker',
+        level INTEGER DEFAULT 0,
+        data_scope TEXT DEFAULT 'self_only',
+        salary_scope TEXT DEFAULT 'none',
+        can_dispatch_request INTEGER DEFAULT 0,
+        can_transfer_request INTEGER DEFAULT 0,
+        description TEXT DEFAULT '',
+        status TEXT DEFAULT '启用',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')))""",
     """CREATE TABLE IF NOT EXISTS permission_overrides (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         role TEXT NOT NULL, module TEXT NOT NULL,
@@ -842,12 +861,32 @@ def seed_data():
         ("wh_una","una123","王磊(UNA)","wh"),("wh_dhl","dhl123","李娜(DHL)","wh"),
         ("finance","fin123","孙琳(财务)","fin"),("sup001","sup123","陈刚(德信)","sup"),
         ("mgr579","579pass","张伟(579)","mgr"),("worker1","w123","张三","worker"),
+        # ── 扩展岗位角色 ──
+        ("ops_dir","ops123","李运营(运营总监)","ops_director"),
+        ("reg_mgr","reg123","周区域(区域经理)","regional_mgr"),
+        ("site_mgr1","site123","王驻仓(驻仓经理)","site_mgr"),
+        ("deputy1","dep123","赵副理(副经理)","deputy_mgr"),
+        ("shift1","shift123","钱班组(班组长)","shift_leader"),
+        ("team1","team123","孙组长(组长)","team_leader"),
+        ("fin_dir","findir123","刘财务(财务总监)","fin_director"),
+        ("hr_mgr","hrmgr123","陈人事(人事经理)","hr_manager"),
+        ("hr_asst","hrasst123","吴人助(人事助理)","hr_assistant"),
+        ("hr_spec","hrspec123","郑人专(人事专员)","hr_specialist"),
+        ("fin_asst","finasst123","冯财助(财务助理)","fin_assistant"),
+        ("fin_spec","finspec123","褚财专(财务专员)","fin_specialist"),
+        ("adm_asst","admasst123","卫行助(行政助理)","admin_assistant"),
+        ("adm_spec","admspec123","蒋行专(行政专员)","admin_specialist"),
     ]:
         c.execute("INSERT INTO users(username,password_hash,display_name,role) VALUES(?,?,?,?)",
                   (u[0],hash_password(u[1]),u[2],u[3]))
 
     # ── Permissions ──
-    # Roles hierarchy: admin (god view, highest) > ceo > mgr > hr > fin > wh > sup > worker
+    # Roles hierarchy: admin (god view) > ceo > ops_director > regional_mgr > site_mgr > deputy_mgr >
+    #   shift_leader > team_leader > worker (operational chain)
+    # Plus: fin_director > fin_assistant > fin_specialist (finance chain)
+    #        hr_manager > hr_assistant > hr_specialist (HR chain)
+    #        admin_assistant > admin_specialist (admin chain)
+    #        mgr (legacy general manager), hr (legacy HR), fin (legacy finance), wh (legacy warehouse), sup (supplier)
     ALL_M = ["dashboard","employees","suppliers","talent","dispatch","recruit",
              "timesheet","settlement","warehouse","schedule","templates",
              "clock","container","messages","analytics","admin","logs",
@@ -863,6 +902,109 @@ def seed_data():
                 ALL_M,
                 ALL_M,
                 ["employees","suppliers","timesheet","talent","dispatch","performance"]),
+        # ── 运营总监 (P9) - 对所有仓有修改权 ──
+        "ops_director": (ALL_M,
+                ["employees","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","safety","regions"],
+                ["employees","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","leave","expense","warehouse","safety","regions"],
+                ["employees","talent","dispatch","recruit","regions"],
+                ALL_M,
+                ["leave","quotation","timesheet","expense","safety","dispatch"],
+                ["employees","suppliers","timesheet","talent","dispatch","performance"]),
+        # ── 区域经理 (P8) - 对其区域管辖仓库有修改权，对薪资和报价有范围权限，对全局其他仓库有浏览权 ──
+        "regional_mgr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
+                "warehouse","schedule","templates","clock","container","messages","analytics",
+                "grades","quotation","files","leave","expense","performance","accounts","whsalary","safety","regions"],
+                ["employees","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","whsalary","safety"],
+                ["employees","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","whsalary","safety","regions"],
+                [],
+                ["employees","timesheet","performance","safety"],
+                ["leave","quotation","timesheet","safety","dispatch"],
+                ["employees","timesheet"]),
+        # ── 驻仓经理 (P7) - 只对其负责仓库有修改权，对薪资和报价有范围权限限制 ──
+        "site_mgr": (["dashboard","employees","timesheet","warehouse","schedule","clock","container",
+                "messages","dispatch","talent","leave","expense","performance","mypage","whsalary","safety","quotation","grades","files"],
+                ["employees","container","schedule","dispatch","leave","expense","performance","safety","files"],
+                ["employees","container","schedule","timesheet","dispatch","performance","whsalary","safety"],
+                [],
+                ["employees","timesheet","container","performance","safety"],
+                ["leave","timesheet","container","safety"],
+                ["employees","timesheet"]),
+        # ── 副经理 (P6) - 整仓代管，协助驻仓经理，可对人事发起人员需求 ──
+        "deputy_mgr": (["dashboard","employees","timesheet","warehouse","schedule","clock","container",
+                "messages","dispatch","talent","leave","expense","performance","mypage","safety","grades"],
+                ["container","schedule","dispatch","leave","expense","safety"],
+                ["container","schedule","timesheet","dispatch","safety"],
+                [],
+                ["timesheet","container","safety"],
+                ["timesheet","container","safety"],
+                []),
+        # ── 班组长 (P5) - 独立负责整班次，可提交人员需求 ──
+        "shift_leader": (["dashboard","employees","timesheet","schedule","clock","container","messages",
+                "dispatch","leave","expense","mypage","safety"],
+                ["container","schedule","dispatch","leave","expense","safety"],
+                ["container","schedule","safety"],
+                [],
+                ["timesheet","container"],
+                ["timesheet","container"],
+                []),
+        # ── 组长 (P4) - 带班3-10人, 仅限本仓数据, 薪资仅建议权 ──
+        "team_leader": (["dashboard","employees","timesheet","schedule","clock","container","messages",
+                "leave","expense","mypage","safety"],
+                ["container","schedule","leave","expense","safety"],
+                ["container","schedule","safety"],
+                [],
+                ["timesheet","container"],
+                [],
+                []),
+        # ── 财务总监 ──
+        "fin_director": (["dashboard","employees","timesheet","settlement","suppliers","analytics","expense",
+                "quotation","whsalary","grades","files","leave","performance","accounts","safety","regions"],
+                ["expense","settlement"],
+                ["expense","settlement","whsalary","quotation"],
+                [],
+                ["timesheet","settlement","analytics","expense","whsalary","quotation"],
+                ["timesheet","expense","settlement"],
+                []),
+        # ── 财务助理 ──
+        "fin_assistant": (["dashboard","employees","timesheet","settlement","suppliers","analytics","expense","quotation"],
+                ["expense"],["expense"],[],["timesheet","settlement","analytics","expense"],["expense"],[]),
+        # ── 财务专员 ──
+        "fin_specialist": (["dashboard","employees","timesheet","settlement","suppliers","analytics","expense"],
+                [],[],[],["timesheet","settlement","analytics","expense"],[],[]),
+        # ── 人事经理 ──
+        "hr_manager": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
+                "schedule","templates","messages","analytics","grades","files","leave","expense","performance","accounts","whsalary","safety","regions"],
+                ["employees","suppliers","talent","dispatch","recruit","schedule","files","leave","expense","grades","performance","accounts","whsalary","safety"],
+                ["employees","suppliers","talent","dispatch","recruit","schedule","timesheet","grades","leave","performance","accounts","whsalary","safety"],
+                ["employees","talent","dispatch"],
+                ["employees","suppliers","talent","timesheet","leave","expense","performance","safety"],
+                ["leave","expense","dispatch"],
+                ["employees","suppliers","talent","timesheet"]),
+        # ── 人事助理 ──
+        "hr_assistant": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet",
+                "schedule","messages","grades","files","leave","performance","accounts","safety"],
+                ["employees","talent","dispatch","recruit","schedule","files","leave","performance","accounts"],
+                ["employees","talent","dispatch","recruit","schedule","leave","performance","accounts"],
+                [],
+                ["employees","talent","timesheet","leave","performance"],
+                ["leave"],
+                ["employees","talent","timesheet"]),
+        # ── 人事专员 ──
+        "hr_specialist": (["dashboard","employees","talent","dispatch","recruit","timesheet",
+                "schedule","messages","grades","files","leave","performance","accounts","safety"],
+                ["employees","talent","recruit","leave","files","accounts"],
+                ["employees","talent","leave","accounts"],
+                [],
+                ["employees","talent","timesheet","leave"],
+                [],
+                ["employees","talent"]),
+        # ── 行政助理 ──
+        "admin_assistant": (["dashboard","employees","messages","files","leave","expense","mypage","safety"],
+                ["files","leave","expense"],["files","leave","expense"],[],["files","leave","expense"],[],[]),
+        # ── 行政专员 ──
+        "admin_specialist": (["dashboard","employees","messages","files","leave","expense","mypage","safety"],
+                ["files","leave","expense"],["files","leave","expense"],[],["files","leave","expense"],[],[]),
+        # ── Legacy roles (保留兼容) ──
         "hr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                 "schedule","templates","messages","analytics","grades","files","leave","expense","performance","accounts","whsalary","safety","regions"],
                ["employees","suppliers","talent","dispatch","recruit","schedule","files","leave","expense","grades","performance","accounts","whsalary","safety"],
@@ -889,11 +1031,26 @@ def seed_data():
         "worker": (["clock","container","schedule","leave","expense","mypage","safety"],["container","leave","expense","safety"],[],[],[],[],[]),
     }
     # data_scope per role: determines what data the role can access
-    # 'all' = full access, 'own_warehouse' = only data for user's warehouse,
+    # 'all' = full access, 'regional' = regional warehouses,
+    # 'own_warehouse' = only data for user's warehouse,
     # 'own_supplier' = only data for user's supplier workers, 'self_only' = only own data
     role_data_scope = {
         "admin": "all",
         "ceo": "all",
+        "ops_director": "all",
+        "regional_mgr": "regional",
+        "site_mgr": "own_warehouse",
+        "deputy_mgr": "own_warehouse",
+        "shift_leader": "own_warehouse",
+        "team_leader": "own_warehouse",
+        "fin_director": "all",
+        "fin_assistant": "all",
+        "fin_specialist": "all",
+        "hr_manager": "all",
+        "hr_assistant": "all",
+        "hr_specialist": "all",
+        "admin_assistant": "all",
+        "admin_specialist": "all",
         "mgr": "all",
         "hr": "all",
         "fin": "all",
@@ -907,6 +1064,20 @@ def seed_data():
     role_hidden_fields = {
         "admin": {},   # admin sees all
         "ceo": {},     # CEO sees all
+        "ops_director": {},  # 运营总监 sees all
+        "regional_mgr": {"employees": "tax_no,tax_id,ssn,iban,health_insurance"},
+        "site_mgr": {"employees": "tax_no,tax_id,ssn,iban,health_insurance"},
+        "deputy_mgr": {"employees": "birth_date,tax_no,tax_id,ssn,iban,base_salary,hourly_rate,health_insurance,emergency_contact,emergency_phone"},
+        "shift_leader": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
+        "team_leader": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
+        "fin_director": {"employees": "emergency_contact,emergency_phone,work_permit_no"},
+        "fin_assistant": {"employees": "birth_date,id_number,emergency_contact,emergency_phone,work_permit_no"},
+        "fin_specialist": {"employees": "birth_date,id_number,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
+        "hr_manager": {},  # HR经理 sees all employee data
+        "hr_assistant": {"employees": "iban"},
+        "hr_specialist": {"employees": "iban,ssn"},
+        "admin_assistant": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method"},
+        "admin_specialist": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method"},
         "mgr": {"employees": "tax_no,tax_id,ssn,iban,health_insurance"},
         "hr": {"employees": "iban"},
         "fin": {"employees": "birth_date,id_number,emergency_contact,emergency_phone,work_permit_no"},
@@ -1003,6 +1174,36 @@ def seed_data():
         c.execute("""INSERT INTO regions(code,name,manager_id,manager_name,description,warehouse_codes,status)
             VALUES(?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING""", reg)
 
+    # ── Job Positions - 岗位定义 (可自行设定，关联到花名册) ──
+    # 运营系列
+    job_positions_data = [
+        ("OPS-DIR","运营总监","Ops Director","Betriebsleiter","运营","P","P9","ops_director",85,"all","all",1,1,"对所有仓有修改权，公司运营最高负责人"),
+        ("REG-MGR","区域经理","Regional Manager","Regionalleiter","运营","P","P8","regional_mgr",80,"regional","regional",1,1,"对其区域管辖仓库有修改权，对薪资和报价有范围权限，对全局其他仓库有浏览权"),
+        ("SITE-MGR","驻仓经理","Site Manager","Standortleiter","运营","P","P7","site_mgr",75,"own_warehouse","own_warehouse",1,1,"只对其负责仓库有修改权，对薪资和报价有范围权限限制"),
+        ("DEP-MGR","副经理","Deputy Manager","Stellv. Standortleiter","运营","P","P6","deputy_mgr",70,"own_warehouse","suggest",1,0,"整仓代管，协助驻仓经理"),
+        ("SHIFT-LDR","班组长","Shift Leader","Schichtleiter","运营","P","P5","shift_leader",65,"own_warehouse","suggest",1,0,"独立负责整班次，可提交人员需求"),
+        ("TEAM-LDR","组长","Team Leader","Teamleiter","运营","P","P4","team_leader",60,"own_warehouse","suggest",0,0,"带班3-10人，对本仓数据有权限，薪资仅建议权"),
+        ("SKILLED","技能人才","Skilled Worker","Facharbeiter","运营","P","P3","worker",50,"self_only","none",0,0,"持有效设备证，独立关键工序"),
+        ("SENIOR-W","资深工人","Senior Worker","Erfahrener Bediener","运营","P","P2","worker",40,"self_only","none",0,0,"多工位独立上岗"),
+        ("WORKER","工人","Worker","Arbeiter","运营","P","P1","worker",30,"self_only","none",0,0,"基础操作工"),
+        ("SUP-W","供应商工人","Supplier Worker","Leiharbeiter","运营","P","P0","worker",20,"self_only","none",0,0,"供应商派遣工人"),
+        # 财务系列
+        ("FIN-DIR","财务总监","Finance Director","Finanzdirektor","财务","M","M5","fin_director",55,"all","all",0,0,"公司财务最高负责人"),
+        ("FIN-ASST","财务助理","Finance Assistant","Finanzassistent","财务","M","M1","fin_assistant",45,"all","none",0,0,"协助财务工作"),
+        ("FIN-SPEC","财务专员","Finance Specialist","Finanzspezialist","财务","M","M2","fin_specialist",40,"all","none",0,0,"独立财务流程"),
+        # 行政系列
+        ("ADM-ASST","行政助理","Admin Assistant","Verwaltungsassistent","行政","M","M1","admin_assistant",40,"all","none",0,0,"日常行政工作"),
+        ("ADM-SPEC","行政专员","Admin Specialist","Verwaltungsspezialist","行政","M","M2","admin_specialist",35,"all","none",0,0,"独立行政流程"),
+        # 人事系列
+        ("HR-MGR","人事经理","HR Manager","Personalleiter","人事","M","M4","hr_manager",55,"all","all",0,0,"人力资源管理负责人"),
+        ("HR-ASST","人事助理","HR Assistant","Personalassistent","人事","M","M1","hr_assistant",45,"all","none",0,0,"协助人事工作"),
+        ("HR-SPEC","人事专员","HR Specialist","Personalspezialist","人事","M","M2","hr_specialist",40,"all","none",0,0,"独立人事流程"),
+    ]
+    for jp in job_positions_data:
+        c.execute("""INSERT INTO job_positions(code,title_zh,title_en,title_de,category,series,grade_code,
+            default_role,level,data_scope,salary_scope,can_dispatch_request,can_transfer_request,description)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING""", jp)
+
     # ── Leave Balances ──
     for e in emps:
         for lt,total in [("annual",20),("sick",30),("personal",5)]:
@@ -1097,6 +1298,7 @@ BACKUP_TABLES = [
     "safety_incidents", "warehouses", "suppliers", "warehouse_salary_config",
     "talent_pool", "recruit_progress", "grade_evaluations", "promotion_applications",
     "bonus_applications", "quotation_records", "employee_files", "audit_logs",
+    "job_positions",
 ]
 
 
