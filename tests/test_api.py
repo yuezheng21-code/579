@@ -3108,7 +3108,7 @@ async def test_timesheet_invalid_date_format(auth_headers):
                           json={"employee_id": "YB-001", "work_date": "not-a-date",
                                 "warehouse_code": "UNA", "hours": 8})
     assert r.status_code == 400
-    assert "日期" in r.json()["detail"] or "Datum" in r.json()["detail"]
+    assert "not-a-date" in r.json()["detail"]
 
 
 @pytest.mark.asyncio

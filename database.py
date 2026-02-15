@@ -1200,7 +1200,7 @@ def restore_database(filename: str) -> dict:
             summary[table] = restored
 
         conn.commit()
-    except Exception as e:
+    except Exception:
         conn.rollback()
         raise
     finally:

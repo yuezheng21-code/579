@@ -1122,7 +1122,7 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
             parts = work_date.split("-")
             d = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
         except (ValueError, IndexError):
-            raise HTTPException(400, "工作日期格式无效，请使用YYYY-MM-DD格式 / Ungültiges Datumsformat")
+            raise HTTPException(400, f"工作日期格式无效: {work_date}，请使用YYYY-MM-DD格式 / Ungültiges Datumsformat")
         week_start = (d - timedelta(days=d.weekday())).isoformat()
         week_end = (d + timedelta(days=6 - d.weekday())).isoformat()
         db = database.get_db()
