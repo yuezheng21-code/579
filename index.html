@@ -647,16 +647,26 @@ const WHSalaryPage=({t})=>{
 
 // ══════ Employees ══════
 const EmpPage=({t})=>{
-  const[emps,setEmps]=useState([]);const[q,setQ]=useState('');
+  const[emps,setEmps]=useState([]);const[q,setQ]=useState('');const[showEdit,setShowEdit]=useState(null);
   useEffect(()=>{API.get('/api/employees').then(setEmps)},[]);
   const filtered=emps.filter(e=>`${e.name}${e.id}${e.grade}${e.primary_wh}`.includes(q));
+  const save=async()=>{
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/employees',d);}
+    else{await API.put(`/api/employees/${showEdit.id}`,showEdit);}
+    showToast('保存成功');setShowEdit(null);API.get('/api/employees').then(setEmps);
+  };
+  const doExport=async()=>{const r=await API.get('/api/export/employees');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='employees.json';a.click();showToast('导出成功');}};
+  const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/employees',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}};inp.click();};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
-      React.createElement('input',{value:q,onChange:e=>setQ(e.target.value),placeholder:'🔍 搜索姓名/工号/职级...'})),
+      React.createElement('input',{value:q,onChange:e=>setQ(e.target.value),placeholder:'🔍 搜索姓名/工号/职级...'}),
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,name:'',phone:'',email:'',grade:'P1',position:'库内',primary_wh:'',source:'自有',status:'在职',gender:'男',nationality:'CN'})},'新增员工'),
+      React.createElement('button',{className:'btn btn-ghost',onClick:doExport},'📤 导出'),
+      React.createElement('button',{className:'btn btn-ghost',onClick:doImport},'📥 导入')),
     React.createElement('div',{className:'table-wrap'},
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
-          ['工号','姓名','职级','岗位','仓库','来源','状态','账号'].map(h=>React.createElement('th',{key:h},h)))),
+          ['工号','姓名','职级','岗位','仓库','来源','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
         React.createElement('tbody',null,filtered.map(e=>React.createElement('tr',{key:e.id},
           React.createElement('td',null,e.id),
           React.createElement('td',null,React.createElement('b',null,e.name)),
@@ -665,7 +675,38 @@ const EmpPage=({t})=>{
           React.createElement('td',null,e.primary_wh),
           React.createElement('td',null,React.createElement(SBadge,{s:e.source==='自有'?'自有':'供应商'})),
           React.createElement('td',null,React.createElement(SBadge,{s:e.status})),
-          React.createElement('td',null,React.createElement(SBadge,{s:e.has_account?'已生成':'未生成'}))))))));
+          React.createElement('td',null,React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(e)},'编辑'))))))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增员工':'编辑员工'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'姓名'),
+            React.createElement('input',{value:showEdit.name||'',onChange:e=>setShowEdit({...showEdit,name:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'职级'),
+            React.createElement('select',{value:showEdit.grade||'P1',onChange:e=>setShowEdit({...showEdit,grade:e.target.value})},
+              ['P0','P1','P2','P3','P4','P5','P6','P7','P8','P9','M1','M2','M3','M4','M5'].map(g=>React.createElement('option',{key:g,value:g},g)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'岗位'),
+            React.createElement('input',{value:showEdit.position||'',onChange:e=>setShowEdit({...showEdit,position:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'电话'),
+            React.createElement('input',{value:showEdit.phone||'',onChange:e=>setShowEdit({...showEdit,phone:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'邮箱'),
+            React.createElement('input',{value:showEdit.email||'',onChange:e=>setShowEdit({...showEdit,email:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'主仓库'),
+            React.createElement('input',{value:showEdit.primary_wh||'',onChange:e=>setShowEdit({...showEdit,primary_wh:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'性别'),
+            React.createElement('select',{value:showEdit.gender||'男',onChange:e=>setShowEdit({...showEdit,gender:e.target.value})},
+              ['男','女'].map(g=>React.createElement('option',{key:g,value:g},g)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'来源'),
+            React.createElement('select',{value:showEdit.source||'自有',onChange:e=>setShowEdit({...showEdit,source:e.target.value})},
+              ['自有','供应商'].map(s=>React.createElement('option',{key:s,value:s},s)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'状态'),
+            React.createElement('select',{value:showEdit.status||'在职',onChange:e=>setShowEdit({...showEdit,status:e.target.value})},
+              ['在职','离职'].map(s=>React.createElement('option',{key:s,value:s},s))))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
 };
 
 // ══════ Grades ══════
@@ -706,14 +747,25 @@ const GradePage=({t})=>{
 
 // ══════ Timesheet ══════
 const TSPage=({t})=>{
-  const[ts,setTs]=useState([]);
-  useEffect(()=>{API.get('/api/timesheet').then(setTs)},[]);
+  const[ts,setTs]=useState([]);const[showEdit,setShowEdit]=useState(null);const[emps,setEmps]=useState([]);const[whs,setWhs]=useState([]);
+  useEffect(()=>{API.get('/api/timesheet').then(setTs);API.get('/api/employees').then(setEmps);API.get('/api/warehouses').then(setWhs);},[]);
+  const save=async()=>{
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/timesheet',d);}
+    else{await API.put(`/api/timesheet/${showEdit.id}`,showEdit);}
+    showToast('保存成功');setShowEdit(null);API.get('/api/timesheet').then(setTs);
+  };
+  const doExport=async()=>{const r=await API.get('/api/export/timesheet');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='timesheet.json';a.click();showToast('导出成功');}};
+  const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/timesheet',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/timesheet').then(setTs);}catch(err){showToast('导入失败: '+err.message,'error');}};inp.click();};
   return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar'},
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>{const now=new Date().toISOString().slice(0,10);setShowEdit({_isNew:true,employee_id:'',employee_name:'',work_date:now,warehouse_code:'',start_time:'08:00',end_time:'17:00',hours:8,position:'库内',grade:'P1',settle_method:'按小时',base_rate:12,hourly_pay:96,notes:''});}},'新增工时'),
+      React.createElement('button',{className:'btn btn-ghost',onClick:doExport},'📤 导出'),
+      React.createElement('button',{className:'btn btn-ghost',onClick:doImport},'📥 导入')),
     React.createElement('div',{style:{marginBottom:8,color:'var(--text2)',fontSize:13}},`共 ${ts.length} 条记录`),
     React.createElement('div',{className:'table-wrap'},
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
-          ['日期','员工','职级','仓库','岗位','时段','工时','时薪','应付','状态'].map(h=>React.createElement('th',{key:h},h)))),
+          ['日期','员工','职级','仓库','岗位','时段','工时','时薪','应付','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
         React.createElement('tbody',null,ts.slice(0,100).map(r=>React.createElement('tr',{key:r.id},
           React.createElement('td',null,r.work_date),React.createElement('td',null,r.employee_name),
           React.createElement('td',{style:{color:gradeColor(r.grade),fontWeight:700}},r.grade),
@@ -723,7 +775,39 @@ const TSPage=({t})=>{
           React.createElement('td',{style:{fontWeight:700}},r.hours+'h'),
           React.createElement('td',null,`€${r.base_rate}`),
           React.createElement('td',{style:{color:'var(--green)',fontWeight:700}},`€${r.hourly_pay}`),
-          React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status}))))))));
+          React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status})),
+          React.createElement('td',null,React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(r)},'编辑'))))))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增工时记录':'编辑工时记录'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'员工'),
+            React.createElement('select',{value:showEdit.employee_id||'',onChange:e=>{const emp=emps.find(em=>em.id===e.target.value);setShowEdit({...showEdit,employee_id:e.target.value,employee_name:emp?emp.name:'',grade:emp?emp.grade:showEdit.grade});},disabled:!showEdit._isNew},
+              React.createElement('option',{value:''},'选择员工'),
+              emps.map(em=>React.createElement('option',{key:em.id,value:em.id},`${em.id} ${em.name}`)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'工作日期'),
+            React.createElement('input',{type:'date',value:showEdit.work_date||'',onChange:e=>setShowEdit({...showEdit,work_date:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'仓库'),
+            React.createElement('select',{value:showEdit.warehouse_code||'',onChange:e=>setShowEdit({...showEdit,warehouse_code:e.target.value})},
+              React.createElement('option',{value:''},'选择仓库'),
+              whs.map(w=>React.createElement('option',{key:w.code,value:w.code},`${w.code} ${w.name}`))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'开始时间'),
+            React.createElement('input',{type:'time',value:showEdit.start_time||'',onChange:e=>setShowEdit({...showEdit,start_time:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'结束时间'),
+            React.createElement('input',{type:'time',value:showEdit.end_time||'',onChange:e=>setShowEdit({...showEdit,end_time:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'工时(h)'),
+            React.createElement('input',{type:'number',value:showEdit.hours||0,onChange:e=>setShowEdit({...showEdit,hours:parseFloat(e.target.value)||0})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'岗位'),
+            React.createElement('input',{value:showEdit.position||'',onChange:e=>setShowEdit({...showEdit,position:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'时薪(€)'),
+            React.createElement('input',{type:'number',value:showEdit.base_rate||0,onChange:e=>setShowEdit({...showEdit,base_rate:parseFloat(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'备注'),
+            React.createElement('input',{value:showEdit.notes||'',onChange:e=>setShowEdit({...showEdit,notes:e.target.value})}))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
 };
 
 // ══════ Settlement ══════
@@ -1087,20 +1171,62 @@ const SuppliersPage=({t})=>{
 
 // ══════ Container Page ══════
 const ContainerPage=({t})=>{
-  const[recs,setRecs]=useState([]);
-  useEffect(()=>{API.get('/api/containers').then(setRecs)},[]);
+  const[recs,setRecs]=useState([]);const[showEdit,setShowEdit]=useState(null);const[whs,setWhs]=useState([]);
+  useEffect(()=>{API.get('/api/containers').then(setRecs);API.get('/api/warehouses').then(setWhs);},[]);
+  const save=async()=>{
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/containers',d);}
+    else{await API.put(`/api/containers/${showEdit.id}`,showEdit);}
+    showToast('保存成功');setShowEdit(null);API.get('/api/containers').then(setRecs);
+  };
   return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar'},
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>{const now=new Date().toISOString().slice(0,10);setShowEdit({_isNew:true,container_no:'',work_date:now,warehouse_code:'',container_type:'40GP',load_type:'卸柜',team_no:'',team_size:2,start_time:'08:00',end_time:'09:00',notes:''});}},'新增装卸柜记录')),
     React.createElement('div',{className:'table-wrap'},
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
-          ['编号','柜号','日期','仓库','柜型','类型','组号','人数','时长(分)','状态'].map(h=>React.createElement('th',{key:h},h)))),
+          ['编号','柜号','日期','仓库','柜型','类型','组号','人数','时长(分)','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
         React.createElement('tbody',null,recs.map(r=>React.createElement('tr',{key:r.id},
           React.createElement('td',null,r.id),React.createElement('td',{style:{fontWeight:700}},r.container_no||'-'),
           React.createElement('td',null,r.work_date||'-'),React.createElement('td',null,r.warehouse_code||'-'),
           React.createElement('td',null,r.container_type||'40GP'),React.createElement('td',null,r.load_type||'卸柜'),
           React.createElement('td',null,r.team_no||'-'),React.createElement('td',null,r.team_size||0),
           React.createElement('td',null,r.duration_minutes||0),
-          React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status||'待审核'}))))))));
+          React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status||'待审核'})),
+          React.createElement('td',null,React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(r)},'编辑'))))))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增装卸柜记录':'编辑装卸柜记录'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'柜号'),
+            React.createElement('input',{value:showEdit.container_no||'',onChange:e=>setShowEdit({...showEdit,container_no:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'工作日期'),
+            React.createElement('input',{type:'date',value:showEdit.work_date||'',onChange:e=>setShowEdit({...showEdit,work_date:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'仓库'),
+            React.createElement('select',{value:showEdit.warehouse_code||'',onChange:e=>setShowEdit({...showEdit,warehouse_code:e.target.value})},
+              React.createElement('option',{value:''},'选择仓库'),
+              whs.map(w=>React.createElement('option',{key:w.code,value:w.code},`${w.code} ${w.name}`))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'柜型'),
+            React.createElement('select',{value:showEdit.container_type||'40GP',onChange:e=>setShowEdit({...showEdit,container_type:e.target.value})},
+              ['20GP','40GP','45HC'].map(ct=>React.createElement('option',{key:ct,value:ct},ct)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'类型'),
+            React.createElement('select',{value:showEdit.load_type||'卸柜',onChange:e=>setShowEdit({...showEdit,load_type:e.target.value})},
+              ['卸柜','装柜'].map(lt=>React.createElement('option',{key:lt,value:lt},lt)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'组号'),
+            React.createElement('input',{value:showEdit.team_no||'',onChange:e=>setShowEdit({...showEdit,team_no:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'人数'),
+            React.createElement('input',{type:'number',value:showEdit.team_size||0,onChange:e=>setShowEdit({...showEdit,team_size:parseInt(e.target.value)||0})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'开始时间'),
+            React.createElement('input',{type:'time',value:showEdit.start_time||'',onChange:e=>setShowEdit({...showEdit,start_time:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'结束时间'),
+            React.createElement('input',{type:'time',value:showEdit.end_time||'',onChange:e=>setShowEdit({...showEdit,end_time:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field',style:{flex:2}},React.createElement('label',null,'备注'),
+            React.createElement('input',{value:showEdit.notes||'',onChange:e=>setShowEdit({...showEdit,notes:e.target.value})}))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
 };
 
 // ══════ Schedule Page ══════
