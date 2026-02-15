@@ -392,7 +392,12 @@ async def create_employee(request: Request, user=Depends(get_user)):
                  employee_id, data.get("primary_wh", ""), data.get("biz_line", "")))
             db.commit()
         except Exception as e:
-            db.close()
+            # Revert has_account flag since account creation failed
+            try:
+                db.execute("UPDATE employees SET has_account=0 WHERE id=?", (employee_id,))
+                db.commit()
+            except Exception:
+                pass
             raise HTTPException(500, f"创建账号失败: {str(e)}")
         finally:
             db.close()
