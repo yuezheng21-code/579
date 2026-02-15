@@ -205,7 +205,7 @@ tr:hover td{background:rgba(79,110,247,.05)}
       localStorage.setItem('hr_token', data.token);
       localStorage.setItem('hr_user', JSON.stringify(data.user || {}));
       showResult('登录成功，正在进入系统...', true);
-      setTimeout(() => location.reload(), 300);
+      setTimeout(() => location.href = '/', 300);
     } catch (e) {
       showResult(String(e.message || e));
     } finally {
