@@ -1,5 +1,5 @@
 """渊博+579 HR V6 — FastAPI Backend (Enhanced with Account Management & Warehouse Salary)"""
-import os, json, uuid, shutil, secrets, string, traceback
+import os, json, uuid, shutil, secrets, string, traceback, threading
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
@@ -26,15 +26,23 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
+_db_ready = False
+
 @app.on_event("startup")
 def on_startup():
-    try:
-        database.init_db()
-        database.seed_data()
-        database.ensure_demo_users()
-    except Exception as e:
-        print(f"⚠️ Database initialization error: {e}")
-        traceback.print_exc()
+    def _init_database():
+        global _db_ready
+        try:
+            database.init_db()
+            database.seed_data()
+            database.ensure_demo_users()
+            _db_ready = True
+            print("✅ Database initialized successfully")
+        except Exception as e:
+            print(f"⚠️ Database initialization error: {e}")
+            traceback.print_exc()
+
+    threading.Thread(target=_init_database, daemon=True).start()
 
 import hashlib, time, hmac, base64
 
@@ -275,7 +283,7 @@ class TimesheetCreateReq(BaseModel):
 @app.get("/health")
 def health_check():
     """Health check endpoint for Railway monitoring"""
-    return {"status": "ok"}
+    return {"status": "ok", "db_ready": _db_ready}
 
 @app.post("/api/login")
 def login(req: LoginReq):
