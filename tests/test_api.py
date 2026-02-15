@@ -1792,3 +1792,201 @@ async def test_sup_role_enhanced_permissions():
     assert "schedule" in modules_with_view
     assert "leave" in modules_with_view
     assert "safety" in modules_with_view
+
+
+# ── New tests for enhanced features ──
+
+@pytest.mark.asyncio
+async def test_container_dock_no_and_ratio(auth_headers):
+    """Test creating container with dock_no and ratio fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/containers", headers=auth_headers,
+                          json={"container_no": "DOCK-TEST-001", "work_date": "2025-02-01",
+                                "warehouse_code": "UNA", "container_type": "40GP",
+                                "load_type": "卸柜", "dock_no": "D-03", "ratio": 0.75,
+                                "team_size": 3, "start_time": "08:00", "end_time": "10:00"})
+        assert r.status_code == 200
+        r = await ac.get("/api/containers", headers=auth_headers)
+        created = [c for c in r.json() if c.get("container_no") == "DOCK-TEST-001"]
+        assert len(created) == 1
+        assert created[0]["dock_no"] == "D-03"
+        assert created[0]["ratio"] == 0.75
+
+
+@pytest.mark.asyncio
+async def test_template_endpoint(auth_headers):
+    """Test downloading import template."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        for table in ["container_records", "schedules", "dispatch_needs", "employees", "suppliers"]:
+            r = await ac.get(f"/api/template/{table}", headers=auth_headers)
+            assert r.status_code == 200
+            data = r.json()
+            assert data["table"] == table
+            assert "fields" in data
+            assert "labels" in data
+            assert "sample" in data
+            assert len(data["fields"]) == len(data["labels"])
+
+
+@pytest.mark.asyncio
+async def test_template_invalid_table(auth_headers):
+    """Test template for invalid table returns error."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/template/invalid_table", headers=auth_headers)
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_export_csv_format(auth_headers):
+    """Test exporting employees as CSV."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/employees?fmt=csv", headers=auth_headers)
+    assert r.status_code == 200
+    assert "text/csv" in r.headers.get("content-type", "")
+    content = r.content.decode("utf-8-sig")
+    assert len(content) > 0
+    lines = content.strip().split("\n")
+    assert len(lines) >= 2  # header + at least one data row
+
+
+@pytest.mark.asyncio
+async def test_export_excel_format(auth_headers):
+    """Test exporting employees as Excel."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/employees?fmt=excel", headers=auth_headers)
+    assert r.status_code == 200
+    assert "ms-excel" in r.headers.get("content-type", "")
+
+
+@pytest.mark.asyncio
+async def test_export_pdf_format(auth_headers):
+    """Test exporting employees as text report (PDF replacement)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/employees?fmt=pdf", headers=auth_headers)
+    assert r.status_code == 200
+    assert "text/plain" in r.headers.get("content-type", "")
+
+
+@pytest.mark.asyncio
+async def test_export_container_records(auth_headers):
+    """Test exporting container records."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/container_records", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["table"] == "container_records"
+    assert "dock_no" in data["fields"]
+    assert "ratio" in data["fields"]
+
+
+@pytest.mark.asyncio
+async def test_export_schedules(auth_headers):
+    """Test exporting schedules."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/schedules", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["table"] == "schedules"
+
+
+@pytest.mark.asyncio
+async def test_export_dispatch_needs(auth_headers):
+    """Test exporting dispatch needs."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/dispatch_needs", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["table"] == "dispatch_needs"
+
+
+@pytest.mark.asyncio
+async def test_import_container_records(auth_headers):
+    """Test batch importing container records."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import/container_records", headers=auth_headers,
+                          json={"data": [
+                              {"container_no": "IMP-CT-001", "work_date": "2025-03-01",
+                               "warehouse_code": "UNA", "container_type": "20GP",
+                               "dock_no": "D-01", "ratio": 0.5},
+                              {"container_no": "IMP-CT-002", "work_date": "2025-03-01",
+                               "warehouse_code": "UNA", "container_type": "40GP",
+                               "dock_no": "D-02", "ratio": 1.0},
+                          ]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["success"] == 2
+
+
+@pytest.mark.asyncio
+async def test_import_schedules(auth_headers):
+    """Test batch importing schedules."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import/schedules", headers=auth_headers,
+                          json={"data": [
+                              {"employee_id": "YB-001", "employee_name": "张三",
+                               "warehouse_code": "UNA", "work_date": "2025-03-15",
+                               "shift": "白班"},
+                          ]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["success"] == 1
+
+
+@pytest.mark.asyncio
+async def test_import_dispatch_needs(auth_headers):
+    """Test batch importing dispatch needs."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import/dispatch_needs", headers=auth_headers,
+                          json={"data": [
+                              {"warehouse_code": "UNA", "position": "库内",
+                               "headcount": 5, "priority": "高"},
+                          ]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["success"] == 1
+
+
+@pytest.mark.asyncio
+async def test_settlement_warehouse_income(auth_headers):
+    """Test settlement warehouse income mode."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/settlement?mode=warehouse_income", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    if len(data) > 0:
+        assert "warehouse_code" in data[0]
+        assert "gross_income" in data[0]
+        assert "headcount" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_settlement_worker_expense(auth_headers):
+    """Test settlement worker expense mode."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/settlement?mode=worker_expense", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    if len(data) > 0:
+        assert "employee_id" in data[0]
+        assert "warehouse_code" in data[0]
+        assert "gross_pay" in data[0]
+        assert "net_total" in data[0]
