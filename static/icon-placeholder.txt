@@ -1,0 +1,6 @@
+Note: Icon files (icon-192.png and icon-512.png) should be created.
+These are referenced in manifest.json for the Progressive Web App.
+You can create these using any image editor with the following specifications:
+- 192x192 pixels and 512x512 pixels
+- Background color: #0f172a (theme color)
+- Logo or text "579" or "渊博579 HR"
