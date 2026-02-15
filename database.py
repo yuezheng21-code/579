@@ -991,6 +991,138 @@ def seed_data():
     conn.commit(); conn.close()
     print("✅ DB seeded with all modules")
 
+
+# ── Database Backup & Restore ──
+
+BACKUP_DIR = os.path.join(os.path.dirname(__file__), "backups")
+
+# Critical tables that must be preserved across upgrades
+BACKUP_TABLES = [
+    "employees", "users", "timesheet", "leave_requests", "leave_balances",
+    "expense_claims", "performance_reviews", "payslips", "payroll_confirmations",
+    "schedules", "container_records", "dispatch_transfers", "dispatch_needs",
+    "safety_incidents", "warehouses", "suppliers", "warehouse_salary_config",
+    "talent_pool", "recruit_progress", "grade_evaluations", "promotion_applications",
+    "bonus_applications", "quotation_records", "employee_files", "audit_logs",
+]
+
+
+def backup_database(tag: str = None) -> str:
+    """Backup all critical tables to a timestamped JSON file.
+    Returns the backup file path."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    label = f"_{tag}" if tag else ""
+    filename = f"backup_{timestamp}{label}.json"
+    filepath = os.path.join(BACKUP_DIR, filename)
+
+    conn = get_db()
+    backup_data = {"timestamp": datetime.now().isoformat(), "tag": tag or "", "tables": {}}
+
+    for table in BACKUP_TABLES:
+        try:
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            backup_data["tables"][table] = [dict(r) for r in rows]
+        except Exception:
+            # Table may not exist yet in older schema versions
+            backup_data["tables"][table] = []
+
+    conn.close()
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(backup_data, f, ensure_ascii=False, indent=2, default=str)
+
+    print(f"✅ Database backup created: {filename} ({sum(len(v) for v in backup_data['tables'].values())} total rows)")
+    return filepath
+
+
+def list_backups() -> list:
+    """List available backup files with metadata."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    backups = []
+    for f in sorted(os.listdir(BACKUP_DIR), reverse=True):
+        if f.startswith("backup_") and f.endswith(".json"):
+            filepath = os.path.join(BACKUP_DIR, f)
+            try:
+                with open(filepath, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                table_counts = {t: len(rows) for t, rows in data.get("tables", {}).items() if rows}
+                backups.append({
+                    "filename": f,
+                    "timestamp": data.get("timestamp", ""),
+                    "tag": data.get("tag", ""),
+                    "size_bytes": os.path.getsize(filepath),
+                    "table_counts": table_counts,
+                    "total_rows": sum(table_counts.values()),
+                })
+            except Exception:
+                backups.append({"filename": f, "error": "无法读取备份文件"})
+    return backups
+
+
+def restore_database(filename: str) -> dict:
+    """Restore critical data from a backup file using INSERT OR REPLACE.
+    Returns summary of restored rows per table."""
+    filepath = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"备份文件不存在: {filename}")
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        backup_data = json.load(f)
+
+    conn = get_db()
+    summary = {}
+
+    for table, rows in backup_data.get("tables", {}).items():
+        if not rows:
+            continue
+        restored = 0
+        for row in rows:
+            cols = list(row.keys())
+            vals = list(row.values())
+            placeholders = ",".join(["?"] * len(cols))
+            col_names = ",".join(cols)
+            try:
+                conn.execute(
+                    f"INSERT OR REPLACE INTO {table}({col_names}) VALUES({placeholders})", vals
+                )
+                restored += 1
+            except Exception:
+                pass  # Skip rows that fail (schema mismatch, etc.)
+        summary[table] = restored
+
+    conn.commit()
+    conn.close()
+    print(f"✅ Database restored from {filename}: {sum(summary.values())} total rows")
+    return summary
+
+
+def auto_backup_before_upgrade() -> str:
+    """Create an automatic backup before database upgrade/reinitialization.
+    Only creates backup if there is existing data to preserve.
+    Returns backup filepath or empty string if no data to backup."""
+    try:
+        conn = get_db()
+        # Check if there's actual user data (not just seed data)
+        emp_count = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+        conn.close()
+        if emp_count > 0:
+            return backup_database(tag="pre_upgrade")
+        return ""
+    except Exception:
+        return ""  # DB may not exist yet (first run)
+
+
+def auto_restore_after_upgrade(backup_path: str) -> dict:
+    """Restore user data from a pre-upgrade backup after init_db/seed_data.
+    Only restores tables that had data in the backup.
+    Returns summary of restored rows."""
+    if not backup_path or not os.path.exists(backup_path):
+        return {}
+    filename = os.path.basename(backup_path)
+    return restore_database(filename)
+
+
 if __name__ == "__main__":
     import sys
     if os.path.exists(DB_PATH): os.remove(DB_PATH)

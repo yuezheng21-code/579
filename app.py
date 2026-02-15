@@ -29,9 +29,21 @@ def _init_database():
     global _db_ready
     for attempt in range(1, DB_INIT_MAX_RETRIES + 1):
         try:
+            # Auto-backup existing data before upgrade/reinitialization
+            backup_path = database.auto_backup_before_upgrade()
+            if backup_path:
+                print(f"📦 Pre-upgrade backup created: {backup_path}")
+
             database.init_db()
             database.seed_data()
             database.ensure_demo_users()
+
+            # Auto-restore user data from backup after upgrade
+            if backup_path:
+                summary = database.auto_restore_after_upgrade(backup_path)
+                if summary:
+                    print(f"♻️ Data restored after upgrade: {sum(summary.values())} rows across {len(summary)} tables")
+
             _db_ready = True
             print("✅ Database initialized successfully")
             return
@@ -2914,6 +2926,51 @@ def icon(size: int):
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}"><rect width="{size}" height="{size}" rx="{size//8}" fill="#4f6ef7"/><text x="50%" y="55%" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-family="Arial" font-size="{size//3}" font-weight="bold">HR</text></svg>'
     from fastapi.responses import Response
     return Response(content=svg, media_type="image/svg+xml")
+
+# ── Database Backup & Restore ──
+
+@app.post("/api/backup")
+def create_backup(user=Depends(get_user)):
+    """Create a database backup. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可创建备份")
+    try:
+        filepath = database.backup_database(tag="manual")
+        filename = os.path.basename(filepath)
+        audit_log(user.get("username", ""), "backup", "database", filename, "手动创建数据库备份")
+        return {"ok": True, "filename": filename, "path": filepath}
+    except Exception as e:
+        raise HTTPException(500, f"备份失败: {str(e)}")
+
+@app.get("/api/backup/list")
+def list_backups(user=Depends(get_user)):
+    """List available database backups. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可查看备份列表")
+    return database.list_backups()
+
+@app.post("/api/backup/restore")
+async def restore_backup(request: Request, user=Depends(get_user)):
+    """Restore database from a backup file. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可恢复备份")
+    data = await request.json()
+    filename = data.get("filename")
+    if not filename:
+        raise HTTPException(400, "请指定备份文件名")
+    # Validate filename to prevent path traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, "无效的文件名")
+    try:
+        summary = database.restore_database(filename)
+        audit_log(user.get("username", ""), "restore", "database", filename,
+                  json.dumps(summary, ensure_ascii=False))
+        return {"ok": True, "filename": filename, "restored": summary,
+                "total_rows": sum(summary.values())}
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"恢复失败: {str(e)}")
 
 # ── Static Files & SPA ──
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")

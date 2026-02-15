@@ -2676,3 +2676,176 @@ async def test_grade_permissions_config():
     # P7+ can transfer
     assert GRADE_PERMISSIONS["P6"]["can_transfer_request"] is False
     assert GRADE_PERMISSIONS["P7"]["can_transfer_request"] is True
+
+
+# ── Database Backup & Restore Tests ──
+
+
+@pytest.mark.asyncio
+async def test_backup_create(auth_headers):
+    """Admin should be able to create a database backup."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/backup", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert "filename" in data
+    assert data["filename"].startswith("backup_")
+    assert data["filename"].endswith(".json")
+    # Clean up backup file
+    import shutil
+    shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_backup_list(auth_headers):
+    """Admin should be able to list backups."""
+    # Create a backup first
+    database.backup_database(tag="test_list")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/backup/list", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    assert len(data) >= 1
+    assert "filename" in data[0]
+    assert "total_rows" in data[0]
+    # Clean up
+    import shutil
+    shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_backup_restore(auth_headers):
+    """Admin should be able to restore from a backup."""
+    # Modify an employee
+    db = database.get_db()
+    db.execute("UPDATE employees SET phone='+49-BACKUP-TEST' WHERE id='YB-001'")
+    db.commit()
+    db.close()
+    # Create backup with modified data
+    filepath = database.backup_database(tag="restore_test")
+    filename = os.path.basename(filepath)
+    # Reset the employee phone
+    db = database.get_db()
+    db.execute("UPDATE employees SET phone='+49-RESET' WHERE id='YB-001'")
+    db.commit()
+    db.close()
+    # Restore from backup
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/backup/restore", headers=auth_headers,
+                          json={"filename": filename})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["total_rows"] > 0
+    assert "employees" in data["restored"]
+    # Verify restored data
+    db = database.get_db()
+    emp = db.execute("SELECT phone FROM employees WHERE id='YB-001'").fetchone()
+    db.close()
+    assert emp["phone"] == "+49-BACKUP-TEST"
+    # Clean up
+    import shutil
+    shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_backup_non_admin_forbidden():
+    """Non-admin users should not be able to create/list/restore backups."""
+    from app import make_token
+    worker_token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {worker_token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/backup", headers=headers)
+        assert r.status_code == 403
+        r = await ac.get("/api/backup/list", headers=headers)
+        assert r.status_code == 403
+        r = await ac.post("/api/backup/restore", headers=headers,
+                          json={"filename": "test.json"})
+        assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_backup_restore_nonexistent_file(auth_headers):
+    """Restoring from a nonexistent backup should return 404."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/backup/restore", headers=auth_headers,
+                          json={"filename": "nonexistent_backup.json"})
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_backup_restore_path_traversal(auth_headers):
+    """Restore should reject filenames with path traversal."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/backup/restore", headers=auth_headers,
+                          json={"filename": "../etc/passwd"})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_backup_preserves_data_across_reinit():
+    """Backup and restore should preserve employee and timesheet data across DB reinitialization."""
+    # Modify employee data
+    db = database.get_db()
+    db.execute("UPDATE employees SET phone='+49-UPGRADE-TEST' WHERE id='YB-001'")
+    db.commit()
+    db.close()
+
+    # Simulate upgrade: backup -> reinit -> restore
+    backup_path = database.auto_backup_before_upgrade()
+    assert backup_path  # Should have created a backup
+
+    # Reinit DB (simulates upgrade)
+    if os.path.exists(database.DB_PATH):
+        os.remove(database.DB_PATH)
+    database.init_db()
+    database.seed_data()
+    database.ensure_demo_users()
+
+    # Verify data was reset by seed
+    db = database.get_db()
+    phone = db.execute("SELECT phone FROM employees WHERE id='YB-001'").fetchone()["phone"]
+    db.close()
+    assert phone != "+49-UPGRADE-TEST"
+
+    # Restore from backup
+    summary = database.auto_restore_after_upgrade(backup_path)
+    assert summary
+    assert summary.get("employees", 0) > 0
+
+    # Verify data is restored
+    db = database.get_db()
+    phone = db.execute("SELECT phone FROM employees WHERE id='YB-001'").fetchone()["phone"]
+    db.close()
+    assert phone == "+49-UPGRADE-TEST"
+
+    # Clean up
+    import shutil
+    shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_backup_database_function():
+    """Test backup_database creates valid JSON with all critical tables."""
+    import json
+    filepath = database.backup_database(tag="unit_test")
+    assert os.path.exists(filepath)
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert "timestamp" in data
+    assert "tables" in data
+    assert "employees" in data["tables"]
+    assert "timesheet" in data["tables"]
+    assert "users" in data["tables"]
+    assert len(data["tables"]["employees"]) > 0
+    # Clean up
+    import shutil
+    shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
