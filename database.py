@@ -401,6 +401,7 @@ def init_db():
         contract_end_date TEXT,                  -- 服务合同结束日期
         headcount_quota INTEGER DEFAULT 0,       -- 合同约定人数
         current_headcount INTEGER DEFAULT 0,     -- 当前派遣人数
+        region TEXT DEFAULT '',                  -- 所属区域 (南战区/鲁尔西/鲁尔东)
         updated_at TEXT DEFAULT (datetime('now')))""",
     # ── NEW: Warehouse Salary Config - 仓库薪资配置表 ──
     """CREATE TABLE IF NOT EXISTS warehouse_salary_config (
@@ -840,11 +841,12 @@ def seed_data():
                 (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),hf,"",scope))
 
     # ── Warehouses (客户仓库 - 第三方劳务派遣) ──
-    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,""),
-              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","第三方派遣","dhl@example.com","","纯派遣","2025-03-01","2026-06-30",15,10,""),
-              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","第三方派遣","579@example.com","","流程承包","2025-06-01","2026-12-31",20,12,""),
-              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,""),
-              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"")]:
+    # Regions: 南战区 (South), 鲁尔西 (Ruhr West), 鲁尔东 (Ruhr East)
+    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,"鲁尔西",""),
+              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","第三方派遣","dhl@example.com","","纯派遣","2025-03-01","2026-06-30",15,10,"鲁尔西",""),
+              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","第三方派遣","579@example.com","","流程承包","2025-06-01","2026-12-31",20,12,"鲁尔东",""),
+              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,"鲁尔东",""),
+              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"南战区","")]:
         c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*len(w))+")", w)
 
     # ── NEW: Warehouse Salary Config ──

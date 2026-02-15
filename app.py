@@ -743,10 +743,27 @@ def get_wh_salary_config(warehouse_code: Optional[str] = None, user=Depends(get_
 
 @app.post("/api/warehouse-salary-config")
 async def create_wh_salary_config(request: Request, user=Depends(get_user)):
-    """创建仓库薪资配置"""
+    """创建仓库薪资配置 - P7+对自己仓库, P8+对区域, P9+/admin/ceo全部"""
+    role = user.get("role", "worker")
     data = await request.json()
     if not data.get("warehouse_code") or not data.get("grade"):
         raise HTTPException(400, "仓库编码和职级不能为空")
+    # Grade-based salary scope check
+    if role not in ("admin", "ceo"):
+        grade = _get_employee_grade(user)
+        gp = _get_grade_permissions(grade)
+        salary_scope = gp["salary_scope"]
+        if salary_scope == "none" or salary_scope == "suggest":
+            raise HTTPException(403, "当前职级无薪资配置修改权限 / Insufficient grade for salary config modification")
+        if salary_scope == "own_warehouse":
+            wh = _get_employee_warehouse(user)
+            if data["warehouse_code"] != wh:
+                raise HTTPException(403, "仅可配置本仓库薪资 / Can only configure salary for own warehouse")
+        if salary_scope == "regional":
+            wh = _get_employee_warehouse(user)
+            region_whs = _get_region_warehouses(wh) if wh else []
+            if data["warehouse_code"] not in region_whs:
+                raise HTTPException(403, "仅可配置本区域仓库薪资 / Can only configure salary for regional warehouses")
     data["id"] = f"WSC-{data['warehouse_code']}-{data['grade']}-{data.get('position_type','库内')}"
     data["created_at"] = datetime.now().isoformat()
     data["updated_at"] = datetime.now().isoformat()
@@ -759,9 +776,32 @@ async def create_wh_salary_config(request: Request, user=Depends(get_user)):
 
 @app.put("/api/warehouse-salary-config/{config_id}")
 async def update_wh_salary_config(config_id: str, request: Request, user=Depends(get_user)):
-    """更新仓库薪资配置"""
+    """更新仓库薪资配置 - P7+对自己仓库, P8+对区域, P9+/admin/ceo全部"""
+    role = user.get("role", "worker")
     data = await request.json()
     data["updated_at"] = datetime.now().isoformat()
+    # Grade-based salary scope check
+    if role not in ("admin", "ceo"):
+        grade = _get_employee_grade(user)
+        gp = _get_grade_permissions(grade)
+        salary_scope = gp["salary_scope"]
+        if salary_scope == "none" or salary_scope == "suggest":
+            raise HTTPException(403, "当前职级无薪资配置修改权限 / Insufficient grade for salary config modification")
+        # Check target warehouse from config_id (format: WSC-{warehouse_code}-{grade}-{position})
+        db = database.get_db()
+        cfg = db.execute("SELECT warehouse_code FROM warehouse_salary_config WHERE id=?", (config_id,)).fetchone()
+        db.close()
+        if cfg:
+            target_wh = cfg["warehouse_code"]
+            if salary_scope == "own_warehouse":
+                wh = _get_employee_warehouse(user)
+                if target_wh != wh:
+                    raise HTTPException(403, "仅可修改本仓库薪资配置 / Can only modify salary config for own warehouse")
+            if salary_scope == "regional":
+                wh = _get_employee_warehouse(user)
+                region_whs = _get_region_warehouses(wh) if wh else []
+                if target_wh not in region_whs:
+                    raise HTTPException(403, "仅可修改本区域仓库薪资配置 / Can only modify salary config for regional warehouses")
     try:
         update("warehouse_salary_config", "id", config_id, data)
     except Exception as e:
@@ -1000,6 +1040,21 @@ def get_timesheet(employee_id: Optional[str] = None, user=Depends(get_user)):
     # Warehouse users see only their warehouse timesheet
     if role == "wh" and user.get("warehouse_code"):
         return q("timesheet", "warehouse_code=?", (user["warehouse_code"],), order="work_date DESC, employee_id ASC")
+    # Worker/mgr with employee_id: apply grade-based data scope
+    if role in ("worker", "mgr") and user.get("employee_id"):
+        scope = _check_grade_data_scope(user)
+        if scope == "self_only":
+            return q("timesheet", "employee_id=?", (user["employee_id"],), order="work_date DESC")
+        if scope == "own_warehouse":
+            wh = _get_employee_warehouse(user)
+            if wh:
+                return q("timesheet", "warehouse_code=?", (wh,), order="work_date DESC, employee_id ASC")
+        if scope == "regional":
+            wh = _get_employee_warehouse(user)
+            region_whs = _get_region_warehouses(wh) if wh else []
+            if region_whs:
+                placeholders = ",".join(["?"] * len(region_whs))
+                return q("timesheet", f"warehouse_code IN ({placeholders})", tuple(region_whs), order="work_date DESC, employee_id ASC")
     return q("timesheet", order="work_date DESC, employee_id ASC")
 
 @app.post("/api/timesheet")
@@ -1451,7 +1506,26 @@ def get_dispatch(user=Depends(get_user)): return q("dispatch_needs")
 def get_recruit(user=Depends(get_user)): return q("recruit_progress")
 
 @app.get("/api/schedules")
-def get_schedules(user=Depends(get_user)): return q("schedules", order="work_date ASC")
+def get_schedules(user=Depends(get_user)):
+    role = user.get("role", "worker")
+    # Worker/mgr with employee_id: apply grade-based data scope
+    if role in ("worker", "mgr") and user.get("employee_id"):
+        scope = _check_grade_data_scope(user)
+        if scope == "self_only":
+            return q("schedules", "employee_id=?", (user["employee_id"],), order="work_date ASC")
+        if scope == "own_warehouse":
+            wh = _get_employee_warehouse(user)
+            if wh:
+                return q("schedules", "warehouse_code=?", (wh,), order="work_date ASC")
+        if scope == "regional":
+            wh = _get_employee_warehouse(user)
+            region_whs = _get_region_warehouses(wh) if wh else []
+            if region_whs:
+                placeholders = ",".join(["?"] * len(region_whs))
+                return q("schedules", f"warehouse_code IN ({placeholders})", tuple(region_whs), order="work_date ASC")
+    if role == "wh" and user.get("warehouse_code"):
+        return q("schedules", "warehouse_code=?", (user["warehouse_code"],), order="work_date ASC")
+    return q("schedules", order="work_date ASC")
 
 @app.get("/api/messages")
 def get_messages(user=Depends(get_user)): return q("messages", order="timestamp DESC")
@@ -1568,6 +1642,88 @@ ROLE_HIERARCHY = {
     "worker": 10,  # Worker
 }
 
+# Grade-based permission levels for operational staff (P-series)
+# P0-P2: self_only — can only see own data, schedules, and timesheets
+# P3: self_only + own warehouse schedules/timesheets (read)
+# P4-P6: own_warehouse — timesheet/schedule/dispatch view+edit for own warehouse; salary = suggest only
+# P7 (驻仓经理): own_warehouse edit; limited salary/quotation scope for own warehouse
+# P8 (区域经理): regional — edit for regional warehouses; limited salary/quotation; browse all others
+# P9 (运营总监): all — full edit for all warehouses
+# P5+: can submit personnel requests (dispatch_needs) to HR
+# P7+: can submit warehouse transfer requests (dispatch_transfers)
+GRADE_PERMISSIONS = {
+    "P0": {"data_scope": "self_only", "can_dispatch_request": False, "can_transfer_request": False, "salary_scope": "none"},
+    "P1": {"data_scope": "self_only", "can_dispatch_request": False, "can_transfer_request": False, "salary_scope": "none"},
+    "P2": {"data_scope": "self_only", "can_dispatch_request": False, "can_transfer_request": False, "salary_scope": "none"},
+    "P3": {"data_scope": "self_only", "can_dispatch_request": False, "can_transfer_request": False, "salary_scope": "none"},
+    "P4": {"data_scope": "own_warehouse", "can_dispatch_request": False, "can_transfer_request": False, "salary_scope": "suggest"},
+    "P5": {"data_scope": "own_warehouse", "can_dispatch_request": True, "can_transfer_request": False, "salary_scope": "suggest"},
+    "P6": {"data_scope": "own_warehouse", "can_dispatch_request": True, "can_transfer_request": False, "salary_scope": "suggest"},
+    "P7": {"data_scope": "own_warehouse", "can_dispatch_request": True, "can_transfer_request": True, "salary_scope": "own_warehouse"},
+    "P8": {"data_scope": "regional", "can_dispatch_request": True, "can_transfer_request": True, "salary_scope": "regional"},
+    "P9": {"data_scope": "all", "can_dispatch_request": True, "can_transfer_request": True, "salary_scope": "all"},
+}
+
+def _get_employee_grade(user: dict) -> str:
+    """Get the grade of the employee associated with a user, or '' if not linked."""
+    eid = user.get("employee_id")
+    if not eid:
+        return ""
+    db = database.get_db()
+    try:
+        emp = db.execute("SELECT grade, primary_wh FROM employees WHERE id=?", (eid,)).fetchone()
+        return emp["grade"] if emp else ""
+    finally:
+        db.close()
+
+def _get_grade_permissions(grade: str) -> dict:
+    """Get grade-based permission config. Returns default (self_only) for unknown grades."""
+    return GRADE_PERMISSIONS.get(grade, {"data_scope": "self_only", "can_dispatch_request": False, "can_transfer_request": False, "salary_scope": "none"})
+
+def _get_employee_warehouse(user: dict) -> str:
+    """Get the primary warehouse of the employee associated with a user."""
+    eid = user.get("employee_id")
+    if not eid:
+        return user.get("warehouse_code", "")
+    db = database.get_db()
+    try:
+        emp = db.execute("SELECT primary_wh FROM employees WHERE id=?", (eid,)).fetchone()
+        return emp["primary_wh"] if emp else user.get("warehouse_code", "")
+    finally:
+        db.close()
+
+def _get_region_warehouses(warehouse_code: str) -> list:
+    """Get all warehouse codes in the same region as the given warehouse."""
+    db = database.get_db()
+    try:
+        wh = db.execute("SELECT region FROM warehouses WHERE code=?", (warehouse_code,)).fetchone()
+        if not wh or not wh["region"]:
+            return [warehouse_code]
+        region = wh["region"]
+        rows = db.execute("SELECT code FROM warehouses WHERE region=?", (region,)).fetchall()
+        return [r["code"] for r in rows]
+    finally:
+        db.close()
+
+def _check_grade_data_scope(user: dict, target_warehouse: str = None) -> str:
+    """Determine data access scope based on employee grade.
+    Returns: 'all', 'regional', 'own_warehouse', 'self_only'.
+    For roles admin/ceo/hr/fin, always returns 'all' (bypasses grade check).
+    For mgr role, uses grade-based scope if employee_id is linked."""
+    role = user.get("role", "worker")
+    if role in ("admin", "ceo", "hr", "fin"):
+        return "all"
+    grade = _get_employee_grade(user)
+    if not grade:
+        # No employee linked, fall back to role-based scope
+        if role == "wh":
+            return "own_warehouse"
+        if role == "sup":
+            return "own_supplier"
+        return "self_only"
+    gp = _get_grade_permissions(grade)
+    return gp["data_scope"]
+
 def _get_role_level(role: str) -> int:
     """Get numeric role level for hierarchy comparison"""
     return ROLE_HIERARCHY.get(role, 0)
@@ -1636,6 +1792,45 @@ def get_my_permissions(user=Depends(get_user)):
         "user_context": user_context,
         "permissions": {p["module"]: dict(p) for p in perms}
     }
+
+@app.get("/api/permissions/grade")
+def get_grade_permissions(user=Depends(get_user)):
+    """Get grade-based permissions for the current user's employee grade.
+    Returns grade data scope, dispatch request ability, transfer request ability, and salary scope."""
+    role = user.get("role", "worker")
+    if role in ("admin", "ceo"):
+        return {
+            "grade": "", "data_scope": "all",
+            "can_dispatch_request": True, "can_transfer_request": True,
+            "salary_scope": "all", "warehouse": "", "region_warehouses": []
+        }
+    grade = _get_employee_grade(user)
+    gp = _get_grade_permissions(grade)
+    wh = _get_employee_warehouse(user)
+    region_whs = _get_region_warehouses(wh) if wh and gp["data_scope"] == "regional" else []
+    return {
+        "grade": grade,
+        "data_scope": gp["data_scope"],
+        "can_dispatch_request": gp["can_dispatch_request"],
+        "can_transfer_request": gp["can_transfer_request"],
+        "salary_scope": gp["salary_scope"],
+        "warehouse": wh,
+        "region_warehouses": region_whs
+    }
+
+@app.get("/api/regions")
+def get_regions(user=Depends(get_user)):
+    """Get all warehouse regions with their warehouses."""
+    db = database.get_db()
+    rows = db.execute("SELECT code, name, region FROM warehouses WHERE region IS NOT NULL AND region != '' ORDER BY region, code").fetchall()
+    db.close()
+    regions = {}
+    for r in rows:
+        region = r["region"]
+        if region not in regions:
+            regions[region] = {"name": region, "warehouses": []}
+        regions[region]["warehouses"].append({"code": r["code"], "name": r["name"]})
+    return list(regions.values())
 
 @app.post("/api/permissions/update")
 async def update_perm(request: Request, user=Depends(get_user)):
@@ -2112,8 +2307,16 @@ async def create_dispatch(request: Request, user=Depends(get_user)):
     data = await request.json()
     if not data.get("warehouse_code"):
         raise HTTPException(400, "仓库编码不能为空")
+    # Grade-based check: P5+ can submit personnel requests, or admin/ceo/hr/mgr roles
+    role = user.get("role", "worker")
+    if role not in ("admin", "ceo", "hr", "mgr"):
+        grade = _get_employee_grade(user)
+        gp = _get_grade_permissions(grade)
+        if not gp["can_dispatch_request"]:
+            raise HTTPException(403, "P5及以上职级方可直接发起人员需求 / Only P5+ can submit personnel requests")
     data["id"] = f"DN-{uuid.uuid4().hex[:6]}"
     data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("requester", user.get("username", ""))
     try:
         insert("dispatch_needs", data)
     except Exception as e:
@@ -2153,6 +2356,69 @@ async def update_schedule(sid: str, request: Request, user=Depends(get_user)):
     except Exception as e:
         raise HTTPException(500, f"更新排班记录失败: {str(e)}")
     audit_log(user.get("username", ""), "update", "schedules", sid, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+# ── Dispatch Transfers (人员调仓) ──
+@app.get("/api/dispatch-transfers")
+def get_dispatch_transfers(user=Depends(get_user)):
+    """获取人员调仓记录列表"""
+    role = user.get("role", "worker")
+    if role in ("admin", "ceo", "hr"):
+        return q("dispatch_transfers", order="created_at DESC")
+    # Grade-based scoping
+    if user.get("employee_id"):
+        scope = _check_grade_data_scope(user)
+        if scope == "all":
+            return q("dispatch_transfers", order="created_at DESC")
+        if scope == "regional":
+            wh = _get_employee_warehouse(user)
+            region_whs = _get_region_warehouses(wh) if wh else []
+            if region_whs:
+                placeholders = ",".join(["?"] * len(region_whs))
+                return q("dispatch_transfers", f"from_wh IN ({placeholders}) OR to_wh IN ({placeholders})",
+                         tuple(region_whs) + tuple(region_whs), order="created_at DESC")
+        if scope == "own_warehouse":
+            wh = _get_employee_warehouse(user)
+            if wh:
+                return q("dispatch_transfers", "from_wh=? OR to_wh=?", (wh, wh), order="created_at DESC")
+    return q("dispatch_transfers", "employee_id=?", (user.get("employee_id", ""),), order="created_at DESC")
+
+@app.post("/api/dispatch-transfers")
+async def create_dispatch_transfer(request: Request, user=Depends(get_user)):
+    """创建人员调仓申请 - P7及以上或admin/ceo/hr可发起"""
+    role = user.get("role", "worker")
+    # Grade-based check: P7+ can submit transfer requests, or admin/ceo/hr
+    if role not in ("admin", "ceo", "hr"):
+        grade = _get_employee_grade(user)
+        gp = _get_grade_permissions(grade)
+        if not gp["can_transfer_request"]:
+            raise HTTPException(403, "P7及以上职级方可发起人员调仓申请 / Only P7+ can submit transfer requests")
+    data = await request.json()
+    if not data.get("employee_id"):
+        raise HTTPException(400, "员工ID不能为空")
+    if not data.get("from_wh") or not data.get("to_wh"):
+        raise HTTPException(400, "调出仓库和调入仓库不能为空")
+    data["id"] = f"DT-{uuid.uuid4().hex[:6]}"
+    data.setdefault("transfer_type", "临时支援")
+    data.setdefault("status", "待审批")
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("dispatch_transfers", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建调仓申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "dispatch_transfers", data["id"],
+              f"调仓: {data.get('employee_id','')} 从{data.get('from_wh','')}到{data.get('to_wh','')}, 类型: {data.get('transfer_type','')}")
+    return {"ok": True, "id": data["id"]}
+
+@app.put("/api/dispatch-transfers/{tid}")
+async def update_dispatch_transfer(tid: str, request: Request, user=Depends(get_user)):
+    """更新人员调仓申请（审批、状态变更等）"""
+    data = await request.json()
+    try:
+        update("dispatch_transfers", "id", tid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新调仓申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "dispatch_transfers", tid, json.dumps(data, ensure_ascii=False))
     return {"ok": True}
 
 @app.delete("/api/{table}/{record_id}")
