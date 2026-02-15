@@ -45,22 +45,35 @@ def _convert_placeholders(query):
     """
     Convert SQLite parameter placeholders (?) to PostgreSQL (%s).
     Only converts ? that are not inside quoted strings.
+    Note: This is a simple implementation. For complex queries, consider using parameterized queries consistently.
     """
-    import re
-    # This regex matches ? outside of single or double quotes
-    # It's a simple approach - for production, consider using a proper SQL parser
     result = []
     in_single_quote = False
     in_double_quote = False
     i = 0
     while i < len(query):
         char = query[i]
-        if char == "'" and (i == 0 or query[i-1] != '\\'):
-            in_single_quote = not in_single_quote
-            result.append(char)
-        elif char == '"' and (i == 0 or query[i-1] != '\\'):
-            in_double_quote = not in_double_quote
-            result.append(char)
+        # Handle single quotes (SQL standard uses '' for escaping)
+        if char == "'":
+            if in_single_quote and i + 1 < len(query) and query[i + 1] == "'":
+                # This is an escaped quote (''), keep both
+                result.append("''")
+                i += 2
+                continue
+            else:
+                in_single_quote = not in_single_quote
+                result.append(char)
+        # Handle double quotes
+        elif char == '"':
+            if in_double_quote and i + 1 < len(query) and query[i + 1] == '"':
+                # This is an escaped quote (""), keep both
+                result.append('""')
+                i += 2
+                continue
+            else:
+                in_double_quote = not in_double_quote
+                result.append(char)
+        # Convert ? to %s only outside quotes
         elif char == '?' and not in_single_quote and not in_double_quote:
             result.append('%s')
         else:
