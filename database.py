@@ -28,14 +28,45 @@ class DictRow:
 
 def get_db():
     if USE_POSTGRES:
-        conn = psycopg2.connect(DATABASE_URL)
-        return DBWrapper(conn, is_postgres=True)
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+            return DBWrapper(conn, is_postgres=True)
+        except Exception as e:
+            print(f"Failed to connect to PostgreSQL: {e}")
+            raise
     else:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         return DBWrapper(conn, is_postgres=False)
+
+def _convert_placeholders(query):
+    """
+    Convert SQLite parameter placeholders (?) to PostgreSQL (%s).
+    Only converts ? that are not inside quoted strings.
+    """
+    import re
+    # This regex matches ? outside of single or double quotes
+    # It's a simple approach - for production, consider using a proper SQL parser
+    result = []
+    in_single_quote = False
+    in_double_quote = False
+    i = 0
+    while i < len(query):
+        char = query[i]
+        if char == "'" and (i == 0 or query[i-1] != '\\'):
+            in_single_quote = not in_single_quote
+            result.append(char)
+        elif char == '"' and (i == 0 or query[i-1] != '\\'):
+            in_double_quote = not in_double_quote
+            result.append(char)
+        elif char == '?' and not in_single_quote and not in_double_quote:
+            result.append('%s')
+        else:
+            result.append(char)
+        i += 1
+    return ''.join(result)
 
 class DBWrapper:
     """Wrapper that handles differences between SQLite and PostgreSQL"""
@@ -46,18 +77,13 @@ class DBWrapper:
     def execute(self, query, params=()):
         """Execute query with automatic parameter placeholder conversion"""
         if self.is_postgres and '?' in query:
-            # Convert SQLite placeholders (?) to PostgreSQL placeholders (%s)
-            converted_query = query.replace('?', '%s')
-            cursor = self.conn.cursor()
-            cursor.execute(converted_query, params)
-            return CursorWrapper(cursor, self.is_postgres)
-        else:
-            cursor = self.conn.cursor()
-            cursor.execute(query, params)
-            return CursorWrapper(cursor, self.is_postgres)
+            query = _convert_placeholders(query)
+        cursor = self.conn.cursor()
+        cursor.execute(query, params)
+        return CursorWrapper(cursor, self.is_postgres)
     
     def cursor(self):
-        return self.conn.cursor()
+        return CursorWrapper(self.conn.cursor(), self.is_postgres)
     
     def commit(self):
         self.conn.commit()
@@ -73,10 +99,8 @@ class CursorWrapper:
     
     def execute(self, query, params=()):
         if self.is_postgres and '?' in query:
-            converted_query = query.replace('?', '%s')
-            self.cursor.execute(converted_query, params)
-        else:
-            self.cursor.execute(query, params)
+            query = _convert_placeholders(query)
+        self.cursor.execute(query, params)
         return self
     
     def fetchone(self):
@@ -111,8 +135,7 @@ def _autoincrement():
 
 def init_db():
     db_wrapper = get_db()
-    conn = db_wrapper.conn  # Get the underlying connection
-    c = conn.cursor()
+    c = db_wrapper.cursor()  # Use wrapper cursor instead of raw conn
     now_expr = _now_expr()
     ts_type = _timestamp_type()
     autoinc = _autoincrement()
@@ -390,7 +413,8 @@ def init_db():
     ]
     for sql in tables:
         c.execute(sql)
-    conn.commit(); conn.close()
+    db_wrapper.commit()
+    db_wrapper.close()
 
 def hash_password(password):
     import hashlib
