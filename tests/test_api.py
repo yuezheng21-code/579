@@ -1,5 +1,7 @@
 """Tests for the HR V6 API endpoints."""
 import os
+import json
+import shutil
 import pytest
 from httpx import AsyncClient, ASGITransport
 
@@ -2694,7 +2696,6 @@ async def test_backup_create(auth_headers):
     assert data["filename"].startswith("backup_")
     assert data["filename"].endswith(".json")
     # Clean up backup file
-    import shutil
     shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
 
 
@@ -2713,7 +2714,6 @@ async def test_backup_list(auth_headers):
     assert "filename" in data[0]
     assert "total_rows" in data[0]
     # Clean up
-    import shutil
     shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
 
 
@@ -2749,7 +2749,6 @@ async def test_backup_restore(auth_headers):
     db.close()
     assert emp["phone"] == "+49-BACKUP-TEST"
     # Clean up
-    import shutil
     shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
 
 
@@ -2828,14 +2827,12 @@ async def test_backup_preserves_data_across_reinit():
     assert phone == "+49-UPGRADE-TEST"
 
     # Clean up
-    import shutil
     shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
 
 
 @pytest.mark.asyncio
 async def test_backup_database_function():
     """Test backup_database creates valid JSON with all critical tables."""
-    import json
     filepath = database.backup_database(tag="unit_test")
     assert os.path.exists(filepath)
     with open(filepath, "r", encoding="utf-8") as f:
@@ -2847,5 +2844,4 @@ async def test_backup_database_function():
     assert "users" in data["tables"]
     assert len(data["tables"]["employees"]) > 0
     # Clean up
-    import shutil
     shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)

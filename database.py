@@ -1,7 +1,7 @@
 """渊博+579 HR V6 Database — All Modules (Enhanced with Warehouse Salary Config)
 Database Abstraction Layer supporting both SQLite and PostgreSQL
 """
-import os, random, json
+import os, random, json, re
 from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "hr_system.db")
@@ -1020,11 +1020,15 @@ def backup_database(tag: str = None) -> str:
     backup_data = {"timestamp": datetime.now().isoformat(), "tag": tag or "", "tables": {}}
 
     for table in BACKUP_TABLES:
+        # Validate table name against whitelist to prevent SQL injection
+        if table not in BACKUP_TABLES:
+            continue
         try:
             rows = conn.execute(f"SELECT * FROM {table}").fetchall()
             backup_data["tables"][table] = [dict(r) for r in rows]
-        except Exception:
+        except Exception as e:
             # Table may not exist yet in older schema versions
+            print(f"⚠️ Backup skipped table {table}: {e}")
             backup_data["tables"][table] = []
 
     conn.close()
@@ -1055,8 +1059,8 @@ def list_backups() -> list:
                     "table_counts": table_counts,
                     "total_rows": sum(table_counts.values()),
                 })
-            except Exception:
-                backups.append({"filename": f, "error": "无法读取备份文件"})
+            except Exception as e:
+                backups.append({"filename": f, "error": f"无法读取备份文件: {e}"})
     return backups
 
 
@@ -1072,13 +1076,23 @@ def restore_database(filename: str) -> dict:
 
     conn = get_db()
     summary = {}
+    _backup_tables_set = set(BACKUP_TABLES)
 
     for table, rows in backup_data.get("tables", {}).items():
         if not rows:
             continue
+        # Validate table name against whitelist to prevent SQL injection
+        if table not in _backup_tables_set:
+            print(f"⚠️ Restore skipped unknown table: {table}")
+            continue
         restored = 0
+        skipped = 0
         for row in rows:
             cols = list(row.keys())
+            # Sanitize column names: only allow alphanumeric and underscore
+            if not all(re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', c) for c in cols):
+                skipped += 1
+                continue
             vals = list(row.values())
             placeholders = ",".join(["?"] * len(cols))
             col_names = ",".join(cols)
@@ -1088,7 +1102,9 @@ def restore_database(filename: str) -> dict:
                 )
                 restored += 1
             except Exception:
-                pass  # Skip rows that fail (schema mismatch, etc.)
+                skipped += 1
+        if skipped > 0:
+            print(f"⚠️ Restore: {table} — {restored} restored, {skipped} skipped")
         summary[table] = restored
 
     conn.commit()

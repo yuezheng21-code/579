@@ -2959,7 +2959,8 @@ async def restore_backup(request: Request, user=Depends(get_user)):
     if not filename:
         raise HTTPException(400, "请指定备份文件名")
     # Validate filename to prevent path traversal
-    if "/" in filename or "\\" in filename or ".." in filename:
+    safe_filename = os.path.basename(filename)
+    if safe_filename != filename or ".." in filename:
         raise HTTPException(400, "无效的文件名")
     try:
         summary = database.restore_database(filename)
