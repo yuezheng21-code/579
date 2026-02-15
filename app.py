@@ -26,13 +26,17 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
+_db_ready = False
+
 @app.on_event("startup")
 def on_startup():
     def _init_database():
+        global _db_ready
         try:
             database.init_db()
             database.seed_data()
             database.ensure_demo_users()
+            _db_ready = True
             print("✅ Database initialized successfully")
         except Exception as e:
             print(f"⚠️ Database initialization error: {e}")
@@ -279,7 +283,7 @@ class TimesheetCreateReq(BaseModel):
 @app.get("/health")
 def health_check():
     """Health check endpoint for Railway monitoring"""
-    return {"status": "ok"}
+    return {"status": "ok", "db_ready": _db_ready}
 
 @app.post("/api/login")
 def login(req: LoginReq):
