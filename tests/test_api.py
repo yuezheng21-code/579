@@ -94,6 +94,68 @@ async def test_create_employee_success(auth_headers):
     data = r.json()
     assert data["ok"] is True
     assert "id" in data
+    # No account should be created by default
+    assert "account" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_employee_with_account(auth_headers):
+    """Creating an employee with create_account=True should also generate a user account."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "权限测试", "grade": "P2", "status": "在职",
+                                "primary_wh": "WH01",
+                                "create_account": True, "account_role": "wh"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert "id" in data
+    assert "account" in data
+    assert data["account"]["role"] == "wh"
+    assert "username" in data["account"]
+    assert "password" in data["account"]
+    assert len(data["account"]["password"]) == 8
+
+    # Verify the user account was actually created in the database
+    employee_id = data["id"]
+    db = database.get_db()
+    user_row = db.execute("SELECT * FROM users WHERE employee_id=?", (employee_id,)).fetchone()
+    db.close()
+    assert user_row is not None
+    assert user_row["role"] == "wh"
+
+    # Verify employee has_account flag is set
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r2 = await ac.get(f"/api/employees/{employee_id}", headers=auth_headers)
+    assert r2.status_code == 200
+    assert r2.json()["has_account"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_employee_with_account_default_role(auth_headers):
+    """When create_account=True but no role specified, default to worker."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "默认角色", "grade": "P1", "status": "在职",
+                                "create_account": True})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["account"]["role"] == "worker"
+
+
+@pytest.mark.asyncio
+async def test_create_employee_with_account_invalid_role(auth_headers):
+    """Invalid role should fall back to worker."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "无效角色", "grade": "P1", "status": "在职",
+                                "create_account": True, "account_role": "invalid_xyz"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["account"]["role"] == "worker"
 
 
 @pytest.mark.asyncio
