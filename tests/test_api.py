@@ -3095,3 +3095,59 @@ async def test_employee_detail_includes_joined_fields(auth_headers):
     assert "supplier_name" in emp
     assert "grade_title" in emp
     assert emp["warehouse_name"] is not None
+
+
+# ── Bug Fix Verification Tests ──
+
+@pytest.mark.asyncio
+async def test_timesheet_invalid_date_format(auth_headers):
+    """Test that creating timesheet with invalid date returns 400 instead of crashing."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/timesheet", headers=auth_headers,
+                          json={"employee_id": "YB-001", "work_date": "not-a-date",
+                                "warehouse_code": "UNA", "hours": 8})
+    assert r.status_code == 400
+    assert "日期" in r.json()["detail"] or "Datum" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_timesheet_malformed_date(auth_headers):
+    """Test that creating timesheet with malformed date returns 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/timesheet", headers=auth_headers,
+                          json={"employee_id": "YB-001", "work_date": "2026-13-45",
+                                "warehouse_code": "UNA", "hours": 8})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_account_generate_nonexistent_employee(auth_headers):
+    """Test generating account for nonexistent employee returns 404 without leaking DB connection."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/accounts/generate", headers=auth_headers,
+                          json={"employee_id": "NONEXIST-999"})
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_settlement_endpoint(auth_headers):
+    """Test settlement endpoint works with try/finally DB handling."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        for mode in ["own", "supplier", "warehouse_income", "worker_expense", "default"]:
+            r = await ac.get(f"/api/settlement?mode={mode}", headers=auth_headers)
+            assert r.status_code == 200
+            assert isinstance(r.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_payroll_summary_default_month(auth_headers):
+    """Test payroll summary with default month parameter."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/payroll-summary", headers=auth_headers)
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)

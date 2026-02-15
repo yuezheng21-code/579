@@ -1112,19 +1112,17 @@ def backup_database(tag: str = None) -> str:
     conn = get_db()
     backup_data = {"timestamp": datetime.now().isoformat(), "tag": tag or "", "tables": {}}
 
-    for table in BACKUP_TABLES:
-        # Validate table name against whitelist to prevent SQL injection
-        if table not in BACKUP_TABLES:
-            continue
-        try:
-            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
-            backup_data["tables"][table] = [dict(r) for r in rows]
-        except Exception as e:
-            # Table may not exist yet in older schema versions
-            print(f"⚠️ Backup skipped table {table}: {e}")
-            backup_data["tables"][table] = []
-
-    conn.close()
+    try:
+        for table in BACKUP_TABLES:
+            try:
+                rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+                backup_data["tables"][table] = [dict(r) for r in rows]
+            except Exception as e:
+                # Table may not exist yet in older schema versions
+                print(f"⚠️ Backup skipped table {table}: {e}")
+                backup_data["tables"][table] = []
+    finally:
+        conn.close()
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(backup_data, f, ensure_ascii=False, indent=2, default=str)
@@ -1171,37 +1169,42 @@ def restore_database(filename: str) -> dict:
     summary = {}
     _backup_tables_set = set(BACKUP_TABLES)
 
-    for table, rows in backup_data.get("tables", {}).items():
-        if not rows:
-            continue
-        # Validate table name against whitelist to prevent SQL injection
-        if table not in _backup_tables_set:
-            print(f"⚠️ Restore skipped unknown table: {table}")
-            continue
-        restored = 0
-        skipped = 0
-        for row in rows:
-            cols = list(row.keys())
-            # Sanitize column names: only allow alphanumeric and underscore
-            if not all(re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', c) for c in cols):
-                skipped += 1
+    try:
+        for table, rows in backup_data.get("tables", {}).items():
+            if not rows:
                 continue
-            vals = list(row.values())
-            placeholders = ",".join(["?"] * len(cols))
-            col_names = ",".join(cols)
-            try:
-                conn.execute(
-                    f"INSERT OR REPLACE INTO {table}({col_names}) VALUES({placeholders})", vals
-                )
-                restored += 1
-            except Exception:
-                skipped += 1
-        if skipped > 0:
-            print(f"⚠️ Restore: {table} — {restored} restored, {skipped} skipped")
-        summary[table] = restored
+            # Validate table name against whitelist to prevent SQL injection
+            if table not in _backup_tables_set:
+                print(f"⚠️ Restore skipped unknown table: {table}")
+                continue
+            restored = 0
+            skipped = 0
+            for row in rows:
+                cols = list(row.keys())
+                # Sanitize column names: only allow alphanumeric and underscore
+                if not all(re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', c) for c in cols):
+                    skipped += 1
+                    continue
+                vals = list(row.values())
+                placeholders = ",".join(["?"] * len(cols))
+                col_names = ",".join(cols)
+                try:
+                    conn.execute(
+                        f"INSERT OR REPLACE INTO {table}({col_names}) VALUES({placeholders})", vals
+                    )
+                    restored += 1
+                except Exception:
+                    skipped += 1
+            if skipped > 0:
+                print(f"⚠️ Restore: {table} — {restored} restored, {skipped} skipped")
+            summary[table] = restored
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     print(f"✅ Database restored from {filename}: {sum(summary.values())} total rows")
     return summary
 

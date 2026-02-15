@@ -275,13 +275,15 @@ def audit_log(username: str, action: str, resource_type: str, resource_id: str, 
     """记录审计日志"""
     try:
         db = database.get_db()
-        # Use the actual schema of audit_logs table
-        db.execute("""
-            INSERT INTO audit_logs (username, action, target_table, target_id, new_value)
-            VALUES (?, ?, ?, ?, ?)
-        """, (username, action, resource_type, resource_id, details))
-        db.commit()
-        db.close()
+        try:
+            # Use the actual schema of audit_logs table
+            db.execute("""
+                INSERT INTO audit_logs (username, action, target_table, target_id, new_value)
+                VALUES (?, ?, ?, ?, ?)
+            """, (username, action, resource_type, resource_id, details))
+            db.commit()
+        finally:
+            db.close()
     except Exception as e:
         # Log the failure but don't fail the operation
         import sys
@@ -322,8 +324,10 @@ def health_check():
 @app.post("/api/login")
 def login(req: LoginReq):
     db = database.get_db()
-    u = db.execute("SELECT * FROM users WHERE username=? AND active=1", (req.username,)).fetchone()
-    db.close()
+    try:
+        u = db.execute("SELECT * FROM users WHERE username=? AND active=1", (req.username,)).fetchone()
+    finally:
+        db.close()
     if not u or not verify_password(req.password, u["password_hash"]):
         raise HTTPException(401, "用户名或密码错误")
     token = make_token(u["username"], u["role"])
@@ -337,8 +341,10 @@ def login(req: LoginReq):
 @app.post("/api/pin-login")
 def pin_login(req: PinReq):
     db = database.get_db()
-    emp = db.execute("SELECT * FROM employees WHERE pin=?", (req.pin,)).fetchone()
-    db.close()
+    try:
+        emp = db.execute("SELECT * FROM employees WHERE pin=?", (req.pin,)).fetchone()
+    finally:
+        db.close()
     if not emp: raise HTTPException(401, "PIN无效")
     token = make_token(emp["id"], "worker", {"pin": 1})
     return {"token": token, "user": {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"]}}
@@ -487,15 +493,17 @@ def get_roster(
     where = " AND ".join(conditions) if conditions else "1=1"
 
     db = database.get_db()
-    rows = db.execute(f"""
-        SELECT e.*, s.name as supplier_name, w.name as warehouse_name, w.service_type
-        FROM employees e
-        LEFT JOIN suppliers s ON s.id = e.supplier_id
-        LEFT JOIN warehouses w ON w.code = e.primary_wh
-        WHERE {where}
-        ORDER BY e.id ASC
-    """, tuple(params)).fetchall()
-    db.close()
+    try:
+        rows = db.execute(f"""
+            SELECT e.*, s.name as supplier_name, w.name as warehouse_name, w.service_type
+            FROM employees e
+            LEFT JOIN suppliers s ON s.id = e.supplier_id
+            LEFT JOIN warehouses w ON w.code = e.primary_wh
+            WHERE {where}
+            ORDER BY e.id ASC
+        """, tuple(params)).fetchall()
+    finally:
+        db.close()
     result = [dict(r) for r in rows]
     return _filter_hidden_fields(result, role, "employees")
 
@@ -503,27 +511,29 @@ def get_roster(
 def get_roster_stats(user=Depends(get_user)):
     """花名册统计 - 按派遣类型、合同类型、来源等统计"""
     db = database.get_db()
-    stats = {
-        "by_dispatch_type": [dict(r) for r in db.execute(
-            "SELECT dispatch_type, COUNT(*) as count FROM employees WHERE status='在职' AND dispatch_type IS NOT NULL GROUP BY dispatch_type"
-        ).fetchall()],
-        "by_contract_type": [dict(r) for r in db.execute(
-            "SELECT contract_type, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY contract_type"
-        ).fetchall()],
-        "by_source": [dict(r) for r in db.execute(
-            "SELECT source, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY source"
-        ).fetchall()],
-        "by_nationality": [dict(r) for r in db.execute(
-            "SELECT nationality, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY nationality"
-        ).fetchall()],
-        "contract_expiring_soon": [dict(r) for r in db.execute(
-            "SELECT id, name, contract_end, primary_wh FROM employees WHERE status='在职' AND contract_end IS NOT NULL AND contract_end <= date('now', '+90 days') ORDER BY contract_end ASC"
-        ).fetchall()],
-        "work_permit_expiring_soon": [dict(r) for r in db.execute(
-            "SELECT id, name, work_permit_expiry, nationality FROM employees WHERE status='在职' AND work_permit_expiry IS NOT NULL AND work_permit_expiry <= date('now', '+90 days') ORDER BY work_permit_expiry ASC"
-        ).fetchall()],
-    }
-    db.close()
+    try:
+        stats = {
+            "by_dispatch_type": [dict(r) for r in db.execute(
+                "SELECT dispatch_type, COUNT(*) as count FROM employees WHERE status='在职' AND dispatch_type IS NOT NULL GROUP BY dispatch_type"
+            ).fetchall()],
+            "by_contract_type": [dict(r) for r in db.execute(
+                "SELECT contract_type, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY contract_type"
+            ).fetchall()],
+            "by_source": [dict(r) for r in db.execute(
+                "SELECT source, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY source"
+            ).fetchall()],
+            "by_nationality": [dict(r) for r in db.execute(
+                "SELECT nationality, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY nationality"
+            ).fetchall()],
+            "contract_expiring_soon": [dict(r) for r in db.execute(
+                "SELECT id, name, contract_end, primary_wh FROM employees WHERE status='在职' AND contract_end IS NOT NULL AND contract_end <= date('now', '+90 days') ORDER BY contract_end ASC"
+            ).fetchall()],
+            "work_permit_expiring_soon": [dict(r) for r in db.execute(
+                "SELECT id, name, work_permit_expiry, nationality FROM employees WHERE status='在职' AND work_permit_expiry IS NOT NULL AND work_permit_expiry <= date('now', '+90 days') ORDER BY work_permit_expiry ASC"
+            ).fetchall()],
+        }
+    finally:
+        db.close()
     return stats
 
 # ── Account Management ──
@@ -531,15 +541,17 @@ def get_roster_stats(user=Depends(get_user)):
 def get_accounts(user=Depends(get_user)):
     """获取所有员工账号状态"""
     db = database.get_db()
-    rows = db.execute("""
-        SELECT e.id, e.name, e.grade, e.primary_wh, e.status, e.has_account,
-               u.username, u.role, u.active as account_active
-        FROM employees e
-        LEFT JOIN users u ON u.employee_id = e.id
-        WHERE e.status = '在职'
-        ORDER BY e.id
-    """).fetchall()
-    db.close()
+    try:
+        rows = db.execute("""
+            SELECT e.id, e.name, e.grade, e.primary_wh, e.status, e.has_account,
+                   u.username, u.role, u.active as account_active
+            FROM employees e
+            LEFT JOIN users u ON u.employee_id = e.id
+            WHERE e.status = '在职'
+            ORDER BY e.id
+        """).fetchall()
+    finally:
+        db.close()
     return [dict(r) for r in rows]
 
 @app.post("/api/accounts/generate")
@@ -550,31 +562,36 @@ async def generate_account(request: Request, user=Depends(get_user)):
     role = data.get("role", "worker")
 
     db = database.get_db()
-    emp = db.execute("SELECT * FROM employees WHERE id=?", (employee_id,)).fetchone()
-    if not emp:
+    try:
+        emp = db.execute("SELECT * FROM employees WHERE id=?", (employee_id,)).fetchone()
+        if not emp:
+            raise HTTPException(404, "员工不存在")
+
+        # 检查是否已有账号
+        existing = db.execute("SELECT * FROM users WHERE employee_id=?", (employee_id,)).fetchone()
+        if existing:
+            raise HTTPException(400, "该员工已有账号")
+
+        # 生成用户名和密码
+        username = employee_id.lower().replace("-", "")
+        password = generate_password(8)
+        password_hash = hash_password(password)
+
+        # 创建账号
+        db.execute("""INSERT INTO users(username, password_hash, display_name, role, employee_id, warehouse_code, biz_line)
+                      VALUES(?,?,?,?,?,?,?)""",
+                   (username, password_hash, emp["name"], role, employee_id, emp["primary_wh"], emp["biz_line"]))
+
+        # 更新员工表
+        db.execute("UPDATE employees SET has_account=1 WHERE id=?", (employee_id,))
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"生成账号失败: {str(e)}")
+    finally:
         db.close()
-        raise HTTPException(404, "员工不存在")
-
-    # 检查是否已有账号
-    existing = db.execute("SELECT * FROM users WHERE employee_id=?", (employee_id,)).fetchone()
-    if existing:
-        db.close()
-        raise HTTPException(400, "该员工已有账号")
-
-    # 生成用户名和密码
-    username = employee_id.lower().replace("-", "")
-    password = generate_password(8)
-    password_hash = hash_password(password)
-
-    # 创建账号
-    db.execute("""INSERT INTO users(username, password_hash, display_name, role, employee_id, warehouse_code, biz_line)
-                  VALUES(?,?,?,?,?,?,?)""",
-               (username, password_hash, emp["name"], role, employee_id, emp["primary_wh"], emp["biz_line"]))
-
-    # 更新员工表
-    db.execute("UPDATE employees SET has_account=1 WHERE id=?", (employee_id,))
-    db.commit()
-    db.close()
 
     return {"ok": True, "username": username, "password": password, "display_name": emp["name"]}
 
@@ -1100,34 +1117,39 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
 
     # Check weekly hours compliance (max 48h/week per German law)
     if employee_id and work_date:
-        db = database.get_db()
         from datetime import date as dt_date
-        parts = work_date.split("-")
-        d = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
+        try:
+            parts = work_date.split("-")
+            d = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
+        except (ValueError, IndexError):
+            raise HTTPException(400, "工作日期格式无效，请使用YYYY-MM-DD格式 / Ungültiges Datumsformat")
         week_start = (d - timedelta(days=d.weekday())).isoformat()
         week_end = (d + timedelta(days=6 - d.weekday())).isoformat()
-        weekly = db.execute(
-            "SELECT COALESCE(SUM(hours),0) as total FROM timesheet WHERE employee_id=? AND work_date>=? AND work_date<=?",
-            (employee_id, week_start, week_end)
-        ).fetchone()
-        weekly_total = (weekly["total"] if weekly else 0) + hours
-        db.close()
+        db = database.get_db()
+        try:
+            weekly = db.execute(
+                "SELECT COALESCE(SUM(hours),0) as total FROM timesheet WHERE employee_id=? AND work_date>=? AND work_date<=?",
+                (employee_id, week_start, week_end)
+            ).fetchone()
+            weekly_total = (weekly["total"] if weekly else 0) + hours
+        finally:
+            db.close()
         if weekly_total > MAX_WEEKLY_HOURS:
             raise HTTPException(400, f"该员工本周已工作{weekly_total-hours}小时，加上本次{hours}小时共{weekly_total}小时，超过德国劳动法{MAX_WEEKLY_HOURS}小时/周上限 / Wöchentliche Arbeitszeit würde {MAX_WEEKLY_HOURS} Stunden überschreiten")
 
     # 检查是否已存在相同的工时记录
     if employee_id and work_date and warehouse_code:
         db = database.get_db()
-        existing = db.execute("""
-            SELECT id FROM timesheet 
-            WHERE employee_id=? AND work_date=? AND warehouse_code=?
-        """, (employee_id, work_date, warehouse_code)).fetchone()
+        try:
+            existing = db.execute("""
+                SELECT id FROM timesheet 
+                WHERE employee_id=? AND work_date=? AND warehouse_code=?
+            """, (employee_id, work_date, warehouse_code)).fetchone()
+        finally:
+            db.close()
         
         if existing:
-            db.close()
             raise HTTPException(400, f"该员工在该日期和仓库已有工时记录 (ID: {existing['id']})")
-        
-        db.close()
 
     # 根据仓库获取薪资配置
     wh = data.get("warehouse_code")
@@ -1136,17 +1158,19 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
 
     if wh and grade:
         db = database.get_db()
-        cfg = db.execute("""
-            SELECT * FROM warehouse_salary_config
-            WHERE warehouse_code=? AND grade=? AND position_type=?
-        """, (wh, grade, position)).fetchone()
+        try:
+            cfg = db.execute("""
+                SELECT * FROM warehouse_salary_config
+                WHERE warehouse_code=? AND grade=? AND position_type=?
+            """, (wh, grade, position)).fetchone()
 
-        if cfg:
-            data["base_rate"] = cfg["hourly_rate"]
-            # 计算应付工资
-            hours = float(data.get("hours", 0))
-            data["hourly_pay"] = round(cfg["hourly_rate"] * hours, 2)
-        db.close()
+            if cfg:
+                data["base_rate"] = cfg["hourly_rate"]
+                # 计算应付工资
+                hours = float(data.get("hours", 0))
+                data["hourly_pay"] = round(cfg["hourly_rate"] * hours, 2)
+        finally:
+            db.close()
 
     data.setdefault("created_at", datetime.now().isoformat())
     data.setdefault("updated_at", datetime.now().isoformat())
@@ -1169,21 +1193,23 @@ def get_payroll_summary(month: Optional[str] = None, user=Depends(get_user)):
         month = datetime.now().strftime("%Y-%m")
 
     db = database.get_db()
-    rows = db.execute(
-        """
-        SELECT t.employee_id, e.name, e.grade,
-               SUM(t.hours) AS total_hours,
-               SUM(t.hourly_pay) AS total_gross,
-               SUM(t.net_pay) AS total_net
-        FROM timesheet t
-        JOIN employees e ON t.employee_id = e.id
-        WHERE t.work_date LIKE ? || '%'
-        GROUP BY t.employee_id
-        ORDER BY e.grade ASC, e.name ASC
-        """,
-        (month,)
-    ).fetchall()
-    db.close()
+    try:
+        rows = db.execute(
+            """
+            SELECT t.employee_id, e.name, e.grade,
+                   SUM(t.hours) AS total_hours,
+                   SUM(t.hourly_pay) AS total_gross,
+                   SUM(t.net_pay) AS total_net
+            FROM timesheet t
+            JOIN employees e ON t.employee_id = e.id
+            WHERE t.work_date LIKE ?
+            GROUP BY t.employee_id
+            ORDER BY e.grade ASC, e.name ASC
+            """,
+            (f"{month}%",)
+        ).fetchall()
+    finally:
+        db.close()
     return [dict(r) for r in rows]
 
 @app.post("/api/timesheet/batch-approve")
@@ -1636,9 +1662,12 @@ async def update_lr(lid: str, request: Request, user=Depends(get_user)):
         if lr:
             current_year = get_current_year()
             db = database.get_db()
-            db.execute("UPDATE leave_balances SET used_days=used_days+?,remaining_days=remaining_days-? WHERE employee_id=? AND year=? AND leave_type=?",
-                (lr[0]["days"], lr[0]["days"], lr[0]["employee_id"], current_year, lr[0]["leave_type"]))
-            db.commit(); db.close()
+            try:
+                db.execute("UPDATE leave_balances SET used_days=used_days+?,remaining_days=remaining_days-? WHERE employee_id=? AND year=? AND leave_type=?",
+                    (lr[0]["days"], lr[0]["days"], lr[0]["employee_id"], current_year, lr[0]["leave_type"]))
+                db.commit()
+            finally:
+                db.close()
     audit_log(user.get("username", ""), "update", "leave_requests", lid, json.dumps(list(data.keys())))
     return {"ok": True}
 
@@ -1714,96 +1743,102 @@ def get_logs(user=Depends(get_user)): return q("audit_logs", order="id DESC", li
 def get_settlement(mode: str = "own", user=Depends(get_user)):
     role = user.get("role", "worker")
     db = database.get_db()
-    # Supplier users only see their own settlement data
-    if role == "sup" and user.get("supplier_id"):
-        sid = user["supplier_id"]
-        rows = db.execute("SELECT supplier_id,warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) pay FROM timesheet WHERE supplier_id=? GROUP BY warehouse_code", (sid,)).fetchall()
-        db.close(); return [dict(r) for r in rows]
-    if mode == "own":
-        rows = db.execute("SELECT employee_id,employee_name,grade,warehouse_code,SUM(hours) h,SUM(hourly_pay) pay,SUM(ssi_deduct) ssi,SUM(tax_deduct) tax,SUM(net_pay) net FROM timesheet WHERE source='自有' GROUP BY employee_id").fetchall()
-    elif mode == "supplier":
-        rows = db.execute("SELECT supplier_id,warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) pay FROM timesheet WHERE source='供应商' GROUP BY supplier_id").fetchall()
-    elif mode == "warehouse_income":
-        # 对仓库的进账版 - Income report per warehouse (what warehouses owe us)
-        rows = db.execute("""SELECT warehouse_code,
-            COUNT(DISTINCT employee_id) headcount, SUM(hours) total_hours,
-            SUM(hourly_pay + piece_pay + perf_bonus + other_fee) gross_income,
-            COUNT(DISTINCT work_date) work_days
-            FROM timesheet GROUP BY warehouse_code""").fetchall()
-    elif mode == "worker_expense":
-        # 对工人的出账版 - Expense report per worker per warehouse (what we pay workers)
-        rows = db.execute("""SELECT employee_id, employee_name, warehouse_code, grade,
-            SUM(hours) total_hours, SUM(hourly_pay) hourly_total,
-            SUM(piece_pay) piece_total, SUM(perf_bonus) perf_total,
-            SUM(other_fee) other_total,
-            SUM(hourly_pay + piece_pay + perf_bonus + other_fee) gross_pay,
-            SUM(ssi_deduct) ssi_total, SUM(tax_deduct) tax_total,
-            SUM(net_pay) net_total
-            FROM timesheet GROUP BY employee_id, warehouse_code""").fetchall()
-    else:
-        rows = db.execute("SELECT warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) cost FROM timesheet GROUP BY warehouse_code").fetchall()
-    db.close(); return [dict(r) for r in rows]
+    try:
+        # Supplier users only see their own settlement data
+        if role == "sup" and user.get("supplier_id"):
+            sid = user["supplier_id"]
+            rows = db.execute("SELECT supplier_id,warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) pay FROM timesheet WHERE supplier_id=? GROUP BY warehouse_code", (sid,)).fetchall()
+            return [dict(r) for r in rows]
+        if mode == "own":
+            rows = db.execute("SELECT employee_id,employee_name,grade,warehouse_code,SUM(hours) h,SUM(hourly_pay) pay,SUM(ssi_deduct) ssi,SUM(tax_deduct) tax,SUM(net_pay) net FROM timesheet WHERE source='自有' GROUP BY employee_id").fetchall()
+        elif mode == "supplier":
+            rows = db.execute("SELECT supplier_id,warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) pay FROM timesheet WHERE source='供应商' GROUP BY supplier_id").fetchall()
+        elif mode == "warehouse_income":
+            # 对仓库的进账版 - Income report per warehouse (what warehouses owe us)
+            rows = db.execute("""SELECT warehouse_code,
+                COUNT(DISTINCT employee_id) headcount, SUM(hours) total_hours,
+                SUM(hourly_pay + piece_pay + perf_bonus + other_fee) gross_income,
+                COUNT(DISTINCT work_date) work_days
+                FROM timesheet GROUP BY warehouse_code""").fetchall()
+        elif mode == "worker_expense":
+            # 对工人的出账版 - Expense report per worker per warehouse (what we pay workers)
+            rows = db.execute("""SELECT employee_id, employee_name, warehouse_code, grade,
+                SUM(hours) total_hours, SUM(hourly_pay) hourly_total,
+                SUM(piece_pay) piece_total, SUM(perf_bonus) perf_total,
+                SUM(other_fee) other_total,
+                SUM(hourly_pay + piece_pay + perf_bonus + other_fee) gross_pay,
+                SUM(ssi_deduct) ssi_total, SUM(tax_deduct) tax_total,
+                SUM(net_pay) net_total
+                FROM timesheet GROUP BY employee_id, warehouse_code""").fetchall()
+        else:
+            rows = db.execute("SELECT warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) cost FROM timesheet GROUP BY warehouse_code").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        db.close()
 
 # ── Dashboard ──
 @app.get("/api/analytics/dashboard")
 def dashboard(user=Depends(get_user)):
     db = database.get_db()
-    current_year_month = get_current_year_month()
-    role = user.get("role", "worker")
+    try:
+        current_year_month = get_current_year_month()
+        role = user.get("role", "worker")
 
-    # Supplier-scoped dashboard: only show their workers' data
-    if role == "sup" and user.get("supplier_id"):
-        sid = user["supplier_id"]
+        # Supplier-scoped dashboard: only show their workers' data
+        if role == "sup" and user.get("supplier_id"):
+            sid = user["supplier_id"]
+            r = {
+                "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
+                "own": 0,
+                "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
+                "wh_count": db.execute("SELECT COUNT(DISTINCT primary_wh) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
+                "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests lr JOIN employees e ON lr.employee_id=e.id WHERE lr.status='待审批' AND e.supplier_id=?", (sid,)).fetchone()[0],
+                "pending_expense": 0,
+                "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE supplier_id=? AND wh_status='待仓库审批'", (sid,)).fetchone()[0],
+                "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE supplier_id=? AND work_date LIKE ?", (sid, f"{current_year_month}%")).fetchone()[0],
+                "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? GROUP BY grade ORDER BY grade", (sid,)).fetchall()],
+                "wh_dist": [dict(r) for r in db.execute("SELECT primary_wh w,COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? GROUP BY primary_wh", (sid,)).fetchall()],
+                "service_type_dist": [],
+                "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? AND dispatch_type IS NOT NULL GROUP BY dispatch_type", (sid,)).fetchall()],
+            }
+            return r
+
+        # Warehouse-scoped dashboard
+        if role == "wh" and user.get("warehouse_code"):
+            wh = user["warehouse_code"]
+            r = {
+                "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
+                "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
+                "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE source='供应商' AND status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
+                "wh_count": 1,
+                "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests WHERE warehouse_code=? AND status='待审批'", (wh,)).fetchone()[0],
+                "pending_expense": 0,
+                "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE warehouse_code=? AND wh_status='待仓库审批'", (wh,)).fetchone()[0],
+                "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE warehouse_code=? AND work_date LIKE ?", (wh, f"{current_year_month}%")).fetchone()[0],
+                "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) GROUP BY grade ORDER BY grade", (wh, f"%{wh}%")).fetchall()],
+                "wh_dist": [{"w": wh, "c": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0]}],
+                "service_type_dist": [],
+                "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) AND dispatch_type IS NOT NULL GROUP BY dispatch_type", (wh, f"%{wh}%")).fetchall()],
+            }
+            return r
+
         r = {
-            "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
-            "own": 0,
-            "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
-            "wh_count": db.execute("SELECT COUNT(DISTINCT primary_wh) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
-            "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests lr JOIN employees e ON lr.employee_id=e.id WHERE lr.status='待审批' AND e.supplier_id=?", (sid,)).fetchone()[0],
-            "pending_expense": 0,
-            "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE supplier_id=? AND wh_status='待仓库审批'", (sid,)).fetchone()[0],
-            "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE supplier_id=? AND work_date LIKE ?", (sid, f"{current_year_month}%")).fetchone()[0],
-            "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? GROUP BY grade ORDER BY grade", (sid,)).fetchall()],
-            "wh_dist": [dict(r) for r in db.execute("SELECT primary_wh w,COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? GROUP BY primary_wh", (sid,)).fetchall()],
-            "service_type_dist": [],
-            "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? AND dispatch_type IS NOT NULL GROUP BY dispatch_type", (sid,)).fetchall()],
+            "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职'").fetchone()[0],
+            "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职'").fetchone()[0],
+            "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE source='供应商' AND status='在职'").fetchone()[0],
+            "wh_count": db.execute("SELECT COUNT(*) FROM warehouses").fetchone()[0],
+            "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests WHERE status='待审批'").fetchone()[0],
+            "pending_expense": db.execute("SELECT COUNT(*) FROM expense_claims WHERE status IN ('已提交','待审批')").fetchone()[0],
+            "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE wh_status='待仓库审批'").fetchone()[0],
+            "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE work_date LIKE ?", (f"{current_year_month}%",)).fetchone()[0],
+            "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' GROUP BY grade ORDER BY grade").fetchall()],
+            "wh_dist": [dict(r) for r in db.execute("SELECT primary_wh w,COUNT(*) c FROM employees WHERE status='在职' GROUP BY primary_wh").fetchall()],
+            "service_type_dist": [dict(r) for r in db.execute("SELECT service_type, COUNT(*) c FROM warehouses WHERE service_type IS NOT NULL GROUP BY service_type").fetchall()],
+            "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND dispatch_type IS NOT NULL GROUP BY dispatch_type").fetchall()],
         }
-        db.close(); return r
-
-    # Warehouse-scoped dashboard
-    if role == "wh" and user.get("warehouse_code"):
-        wh = user["warehouse_code"]
-        r = {
-            "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
-            "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
-            "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE source='供应商' AND status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
-            "wh_count": 1,
-            "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests WHERE warehouse_code=? AND status='待审批'", (wh,)).fetchone()[0],
-            "pending_expense": 0,
-            "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE warehouse_code=? AND wh_status='待仓库审批'", (wh,)).fetchone()[0],
-            "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE warehouse_code=? AND work_date LIKE ?", (wh, f"{current_year_month}%")).fetchone()[0],
-            "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) GROUP BY grade ORDER BY grade", (wh, f"%{wh}%")).fetchall()],
-            "wh_dist": [{"w": wh, "c": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0]}],
-            "service_type_dist": [],
-            "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) AND dispatch_type IS NOT NULL GROUP BY dispatch_type", (wh, f"%{wh}%")).fetchall()],
-        }
-        db.close(); return r
-
-    r = {
-        "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职'").fetchone()[0],
-        "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职'").fetchone()[0],
-        "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE source='供应商' AND status='在职'").fetchone()[0],
-        "wh_count": db.execute("SELECT COUNT(*) FROM warehouses").fetchone()[0],
-        "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests WHERE status='待审批'").fetchone()[0],
-        "pending_expense": db.execute("SELECT COUNT(*) FROM expense_claims WHERE status IN ('已提交','待审批')").fetchone()[0],
-        "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE wh_status='待仓库审批'").fetchone()[0],
-        "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE work_date LIKE ?", (f"{current_year_month}%",)).fetchone()[0],
-        "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' GROUP BY grade ORDER BY grade").fetchall()],
-        "wh_dist": [dict(r) for r in db.execute("SELECT primary_wh w,COUNT(*) c FROM employees WHERE status='在职' GROUP BY primary_wh").fetchall()],
-        "service_type_dist": [dict(r) for r in db.execute("SELECT service_type, COUNT(*) c FROM warehouses WHERE service_type IS NOT NULL GROUP BY service_type").fetchall()],
-        "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND dispatch_type IS NOT NULL GROUP BY dispatch_type").fetchall()],
-    }
-    db.close(); return r
+        return r
+    finally:
+        db.close()
 
 # ── Permissions ──
 # Role hierarchy: admin (god view) > ceo > mgr > hr > fin > wh > sup > worker
@@ -2142,15 +2177,18 @@ async def update_perm(request: Request, user=Depends(get_user)):
     if user.get("role") != "admin":
         raise HTTPException(403, "仅管理员可修改权限设置")
     db = database.get_db()
-    db.execute("""UPDATE permission_overrides SET can_view=?,can_create=?,can_edit=?,can_delete=?,
-        can_export=?,can_approve=?,can_import=?,hidden_fields=?,editable_fields=?,
-        data_scope=?,scope_grades=?,scope_departments=?,scope_warehouses=? WHERE role=? AND module=?""",
-        (d.get("can_view",0),d.get("can_create",0),d.get("can_edit",0),d.get("can_delete",0),
-         d.get("can_export",0),d.get("can_approve",0),d.get("can_import",0),
-         d.get("hidden_fields",""),d.get("editable_fields",""),
-         d.get("data_scope","all"),d.get("scope_grades",""),d.get("scope_departments",""),d.get("scope_warehouses",""),
-         d["role"],d["module"]))
-    db.commit(); db.close()
+    try:
+        db.execute("""UPDATE permission_overrides SET can_view=?,can_create=?,can_edit=?,can_delete=?,
+            can_export=?,can_approve=?,can_import=?,hidden_fields=?,editable_fields=?,
+            data_scope=?,scope_grades=?,scope_departments=?,scope_warehouses=? WHERE role=? AND module=?""",
+            (d.get("can_view",0),d.get("can_create",0),d.get("can_edit",0),d.get("can_delete",0),
+             d.get("can_export",0),d.get("can_approve",0),d.get("can_import",0),
+             d.get("hidden_fields",""),d.get("editable_fields",""),
+             d.get("data_scope","all"),d.get("scope_grades",""),d.get("scope_departments",""),d.get("scope_warehouses",""),
+             d["role"],d["module"]))
+        db.commit()
+    finally:
+        db.close()
     audit_log(user.get("username", ""), "update", "permission_overrides", f"{d['role']}/{d['module']}", json.dumps(d))
     return {"ok": True}
 
@@ -2422,9 +2460,11 @@ def export_table(table: str, fmt: str = "json", user=Depends(get_user)):
     # Apply hidden_fields filter (admin sees all)
     if role != "admin":
         db = database.get_db()
-        perm = db.execute("SELECT hidden_fields FROM permission_overrides WHERE role=? AND module=?",
-                          (role, module)).fetchone()
-        db.close()
+        try:
+            perm = db.execute("SELECT hidden_fields FROM permission_overrides WHERE role=? AND module=?",
+                              (role, module)).fetchone()
+        finally:
+            db.close()
         if perm and perm["hidden_fields"]:
             hidden = [f.strip() for f in perm["hidden_fields"].split(",") if f.strip()]
             fields = [f for f in fields if f not in hidden]
