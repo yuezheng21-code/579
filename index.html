@@ -289,7 +289,7 @@ const API = {
     if(this.token) opt.headers['Authorization'] = 'Bearer '+this.token;
     if(body) opt.body = JSON.stringify(body);
     const r = await fetch(url,opt);
-    if(r.status===401){ this.setToken(''); window.location.reload(); return null; }
+    if(r.status===401){if(url!=='/api/login'&&url!=='/api/pin-login'){this.setToken('');localStorage.removeItem('hr_user');window.location.reload();return null}}
     return r.json();
   },
   get(u){return this.req('GET',u)}, post(u,b){return this.req('POST',u,b)},
