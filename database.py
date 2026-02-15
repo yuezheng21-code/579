@@ -363,6 +363,7 @@ def init_db():
         emergency_phone TEXT,                    -- 紧急联系人电话
         work_permit_no TEXT,                     -- 工作许可证号
         work_permit_expiry TEXT,                 -- 工作许可证到期日
+        work_hours_per_week REAL DEFAULT 40,     -- 每周工作小时数
         annual_leave_days REAL DEFAULT 20, sick_leave_days REAL DEFAULT 30,
         status TEXT DEFAULT '在职', join_date TEXT, leave_date TEXT, pin TEXT,
         file_folder TEXT, has_account INTEGER DEFAULT 0,
@@ -436,10 +437,13 @@ def init_db():
         perf_bonus REAL DEFAULT 0, other_fee REAL DEFAULT 0,
         ssi_deduct REAL DEFAULT 0, tax_deduct REAL DEFAULT 0, net_pay REAL DEFAULT 0,
         container_no TEXT, container_type TEXT, paper_photo TEXT,
-        wh_status TEXT DEFAULT '待仓库审批',
+        wh_status TEXT DEFAULT '待班组长审批',
+        leader_approver TEXT, leader_approve_time TEXT,
         wh_approver TEXT, wh_approve_time TEXT,
+        regional_approver TEXT, regional_approve_time TEXT,
         fin_approver TEXT, fin_approve_time TEXT,
         booked INTEGER DEFAULT 0, notes TEXT,
+        dispute_status TEXT, dispute_reason TEXT, dispute_reply TEXT,
         created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))""",
     # ── Container Records ──
     """CREATE TABLE IF NOT EXISTS container_records (
@@ -534,6 +538,40 @@ def init_db():
         status TEXT DEFAULT '已发布',
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now')))""",
+    # ── Payslips - 工资条 ──
+    """CREATE TABLE IF NOT EXISTS payslips (
+        id TEXT PRIMARY KEY,
+        employee_id TEXT NOT NULL,
+        employee_name TEXT,
+        month TEXT NOT NULL,
+        total_hours REAL DEFAULT 0,
+        hourly_pay REAL DEFAULT 0,
+        piece_pay REAL DEFAULT 0,
+        perf_bonus REAL DEFAULT 0,
+        other_bonus REAL DEFAULT 0,
+        gross_pay REAL DEFAULT 0,
+        ssi_deduct REAL DEFAULT 0,
+        tax_deduct REAL DEFAULT 0,
+        other_deduct REAL DEFAULT 0,
+        net_pay REAL DEFAULT 0,
+        status TEXT DEFAULT '待确认',
+        confirmed_by_employee INTEGER DEFAULT 0,
+        confirmed_at TEXT,
+        generated_by TEXT,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')))""",
+    # ── Payroll Confirmations - 工资确认流程 ──
+    """CREATE TABLE IF NOT EXISTS payroll_confirmations (
+        id TEXT PRIMARY KEY,
+        month TEXT NOT NULL,
+        step TEXT NOT NULL,
+        status TEXT DEFAULT '待审批',
+        approver TEXT,
+        approve_time TEXT,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(month, step))""",
     ]
     for sql in tables:
         c.execute(_adapt_sql_for_db(sql))

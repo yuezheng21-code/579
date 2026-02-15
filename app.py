@@ -907,16 +907,36 @@ def get_payroll_summary(month: Optional[str] = None, user=Depends(get_user)):
 
 @app.post("/api/timesheet/batch-approve")
 async def batch_approve(request: Request, user=Depends(get_user)):
+    """
+    多级审批工时记录:
+    type=leader  班组长审批: 待班组长审批 → 已班组长审批
+    type=wh      驻仓经理审批: 已班组长审批 → 已仓库审批
+    type=regional 区域经理审批: 已仓库审批 → 已区域审批
+    type=fin     财务确认: 已区域审批 → 已入账
+    """
     body = await request.json()
     db = database.get_db()
+    approve_type = body.get("type", "wh")
+    now_ts = datetime.now().isoformat()
+    approver = user.get("display_name", "")
     try:
         for tid in body.get("ids", []):
-            if body.get("type") == "wh":
-                db.execute("UPDATE timesheet SET wh_status='已仓库审批',wh_approver=?,wh_approve_time=? WHERE id=?",
-                           (user.get("display_name",""), datetime.now().isoformat(), tid))
+            if approve_type == "leader":
+                db.execute(
+                    "UPDATE timesheet SET wh_status='已班组长审批',leader_approver=?,leader_approve_time=? WHERE id=?",
+                    (approver, now_ts, tid))
+            elif approve_type == "wh":
+                db.execute(
+                    "UPDATE timesheet SET wh_status='已仓库审批',wh_approver=?,wh_approve_time=? WHERE id=?",
+                    (approver, now_ts, tid))
+            elif approve_type == "regional":
+                db.execute(
+                    "UPDATE timesheet SET wh_status='已区域审批',regional_approver=?,regional_approve_time=? WHERE id=?",
+                    (approver, now_ts, tid))
             else:
-                db.execute("UPDATE timesheet SET wh_status='已入账',fin_approver=?,fin_approve_time=? WHERE id=?",
-                           (user.get("display_name",""), datetime.now().isoformat(), tid))
+                db.execute(
+                    "UPDATE timesheet SET wh_status='已入账',fin_approver=?,fin_approve_time=? WHERE id=?",
+                    (approver, now_ts, tid))
         db.commit()
         return {"ok": True}
     except Exception as e:
@@ -1654,6 +1674,242 @@ async def upload_file(file: UploadFile = File(...), category: str = Form("genera
     content = await file.read()
     with open(path, "wb") as f: f.write(content)
     return {"filename": fname, "url": f"/uploads/{fname}", "size": len(content)}
+
+# ── Payslips - 工资条 ──
+@app.get("/api/payslips")
+def get_payslips(month: Optional[str] = None, employee_id: Optional[str] = None, user=Depends(get_user)):
+    """获取工资条列表"""
+    db = database.get_db()
+    sql = "SELECT * FROM payslips WHERE 1=1"
+    params: list = []
+    if month:
+        sql += " AND month=?"
+        params.append(month)
+    if employee_id:
+        sql += " AND employee_id=?"
+        params.append(employee_id)
+    sql += " ORDER BY month DESC, employee_name ASC"
+    rows = db.execute(sql, params).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/payslips/generate")
+async def generate_payslips(request: Request, user=Depends(get_user)):
+    """根据工时记录生成指定月份的工资条"""
+    body = await request.json()
+    month = body.get("month", datetime.now().strftime("%Y-%m"))
+    db = database.get_db()
+    try:
+        rows = db.execute("""
+            SELECT t.employee_id, e.name,
+                   SUM(t.hours) AS total_hours,
+                   SUM(t.hourly_pay) AS hourly_pay,
+                   SUM(t.piece_pay) AS piece_pay,
+                   SUM(t.perf_bonus) AS perf_bonus,
+                   SUM(t.other_fee) AS other_bonus,
+                   SUM(t.hourly_pay + t.piece_pay + t.perf_bonus + t.other_fee) AS gross_pay,
+                   SUM(t.ssi_deduct) AS ssi_deduct,
+                   SUM(t.tax_deduct) AS tax_deduct,
+                   SUM(t.net_pay) AS net_pay
+            FROM timesheet t
+            JOIN employees e ON t.employee_id = e.id
+            WHERE t.work_date LIKE ? || '%'
+            GROUP BY t.employee_id
+        """, (month,)).fetchall()
+        count = 0
+        for r in rows:
+            pid = str(uuid.uuid4())
+            db.execute("""
+                INSERT OR REPLACE INTO payslips
+                (id, employee_id, employee_name, month, total_hours, hourly_pay,
+                 piece_pay, perf_bonus, other_bonus, gross_pay, ssi_deduct, tax_deduct,
+                 other_deduct, net_pay, status, generated_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,'待确认',?)
+            """, (pid, r["employee_id"], r["name"], month,
+                  r["total_hours"], r["hourly_pay"], r["piece_pay"],
+                  r["perf_bonus"], r["other_bonus"], r["gross_pay"],
+                  r["ssi_deduct"], r["tax_deduct"], r["net_pay"],
+                  user.get("display_name", "")))
+            count += 1
+        db.commit()
+        return {"ok": True, "count": count, "month": month}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"生成工资条失败: {str(e)}")
+    finally:
+        db.close()
+
+@app.get("/api/mypage/payslips")
+def get_my_payslips(user=Depends(get_user)):
+    """获取当前员工的工资条"""
+    eid = user.get("employee_id")
+    if not eid:
+        return []
+    db = database.get_db()
+    rows = db.execute(
+        "SELECT * FROM payslips WHERE employee_id=? ORDER BY month DESC", (eid,)
+    ).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/payslips/{payslip_id}/confirm")
+async def confirm_payslip(payslip_id: str, user=Depends(get_user)):
+    """员工确认工资条"""
+    db = database.get_db()
+    try:
+        db.execute(
+            "UPDATE payslips SET confirmed_by_employee=1, confirmed_at=?, status='已确认' WHERE id=?",
+            (datetime.now().isoformat(), payslip_id))
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+# ── Salary Disputes - 薪资申诉 ──
+@app.post("/api/payslips/{payslip_id}/dispute")
+async def create_dispute(payslip_id: str, request: Request, user=Depends(get_user)):
+    """员工对工资条提出申诉"""
+    body = await request.json()
+    reason = body.get("reason", "")
+    db = database.get_db()
+    try:
+        db.execute(
+            "UPDATE payslips SET status='申诉中', notes=? WHERE id=?",
+            (reason, payslip_id))
+        # Also log the dispute to audit_logs
+        db.execute(
+            "INSERT INTO audit_logs (id,user,action,target,detail,created_at) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), user.get("username", ""),
+             "salary_dispute", payslip_id, reason, datetime.now().isoformat()))
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+@app.post("/api/timesheet/{ts_id}/dispute")
+async def create_timesheet_dispute(ts_id: str, request: Request, user=Depends(get_user)):
+    """员工对工时记录提出申诉"""
+    body = await request.json()
+    reason = body.get("reason", "")
+    db = database.get_db()
+    try:
+        db.execute(
+            "UPDATE timesheet SET dispute_status='申诉中', dispute_reason=? WHERE id=?",
+            (reason, ts_id))
+        db.execute(
+            "INSERT INTO audit_logs (id,user,action,target,detail,created_at) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), user.get("username", ""),
+             "timesheet_dispute", ts_id, reason, datetime.now().isoformat()))
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+@app.post("/api/timesheet/{ts_id}/dispute-reply")
+async def reply_timesheet_dispute(ts_id: str, request: Request, user=Depends(get_user)):
+    """管理层回复工时申诉"""
+    body = await request.json()
+    reply = body.get("reply", "")
+    status = body.get("status", "已处理")
+    db = database.get_db()
+    try:
+        db.execute(
+            "UPDATE timesheet SET dispute_status=?, dispute_reply=? WHERE id=?",
+            (status, reply, ts_id))
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+# ── Payroll Confirmation Flow - 工资确认流程 ──
+@app.get("/api/payroll-confirmations")
+def get_payroll_confirmations(month: Optional[str] = None, user=Depends(get_user)):
+    """获取工资确认流程状态"""
+    db = database.get_db()
+    if month:
+        rows = db.execute("SELECT * FROM payroll_confirmations WHERE month=? ORDER BY created_at", (month,)).fetchall()
+    else:
+        rows = db.execute("SELECT * FROM payroll_confirmations ORDER BY month DESC, created_at").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/payroll-confirmations")
+async def approve_payroll(request: Request, user=Depends(get_user)):
+    """
+    工资多级确认: step = leader/wh_manager/regional_manager/finance
+    班组长 → 驻仓经理 → 区域经理 → 财务总监
+    """
+    body = await request.json()
+    month = body.get("month", datetime.now().strftime("%Y-%m"))
+    step = body.get("step")
+    notes = body.get("notes", "")
+    if step not in ("leader", "wh_manager", "regional_manager", "finance"):
+        raise HTTPException(400, "无效的审批步骤")
+    db = database.get_db()
+    try:
+        pid = str(uuid.uuid4())
+        db.execute("""
+            INSERT OR REPLACE INTO payroll_confirmations (id, month, step, status, approver, approve_time, notes)
+            VALUES (?, ?, ?, '已审批', ?, ?, ?)
+        """, (pid, month, step, user.get("display_name", ""), datetime.now().isoformat(), notes))
+        db.commit()
+        return {"ok": True, "month": month, "step": step}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+@app.get("/api/payroll-preview")
+def get_payroll_preview(month: Optional[str] = None, user=Depends(get_user)):
+    """发薪前预览报表：汇总月度工资数据供财务核对"""
+    if not month:
+        month = datetime.now().strftime("%Y-%m")
+    db = database.get_db()
+    rows = db.execute("""
+        SELECT t.employee_id, e.name, e.grade, e.primary_wh,
+               COUNT(DISTINCT t.work_date) AS work_days,
+               SUM(t.hours) AS total_hours,
+               SUM(t.hourly_pay) AS total_hourly,
+               SUM(t.piece_pay) AS total_piece,
+               SUM(t.perf_bonus) AS total_perf,
+               SUM(t.other_fee) AS total_other,
+               SUM(t.hourly_pay + t.piece_pay + t.perf_bonus + t.other_fee) AS gross_pay,
+               SUM(t.ssi_deduct) AS total_ssi,
+               SUM(t.tax_deduct) AS total_tax,
+               SUM(t.net_pay) AS net_pay,
+               t.wh_status
+        FROM timesheet t
+        JOIN employees e ON t.employee_id = e.id
+        WHERE t.work_date LIKE ? || '%'
+        GROUP BY t.employee_id
+        ORDER BY e.grade ASC, e.name ASC
+    """, (month,)).fetchall()
+    # Get confirmation status for this month
+    confirmations = db.execute(
+        "SELECT step, status, approver, approve_time FROM payroll_confirmations WHERE month=?", (month,)
+    ).fetchall()
+    db.close()
+    return {
+        "month": month,
+        "employees": [dict(r) for r in rows],
+        "confirmations": [dict(c) for c in confirmations],
+        "total_count": len(rows),
+        "total_gross": sum(r["gross_pay"] or 0 for r in rows),
+        "total_net": sum(r["net_pay"] or 0 for r in rows)
+    }
 
 # ── PWA Manifest ──
 @app.get("/manifest.json")

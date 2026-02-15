@@ -403,14 +403,22 @@ const DashPage=({t})=>{
 // ══════ My Page (Employee Personal Page) ══════
 const MyPage=({t,user})=>{
   const[data,setData]=useState(null);const[salaryConfig,setSalaryConfig]=useState([]);
-  const[tab,setTab]=useState('info');
+  const[tab,setTab]=useState('info');const[payslips,setPayslips]=useState([]);
+  const[disputeId,setDisputeId]=useState(null);const[disputeReason,setDisputeReason]=useState('');
   useEffect(()=>{
     API.get('/api/mypage').then(setData);
     API.get('/api/mypage/salary-config').then(r=>setSalaryConfig(r?.configs||[]));
+    API.get('/api/mypage/payslips').then(r=>setPayslips(r||[]));
   },[]);
   if(!data)return React.createElement('div',{className:'empty'},'加载中...');
   const emp=data.employee;
   const leaveMap={annual:'年假',sick:'病假',personal:'事假'};
+  const confirmPayslip=(id)=>{API.post(`/api/payslips/${id}/confirm`).then(()=>{
+    toast('已确认工资条');API.get('/api/mypage/payslips').then(r=>setPayslips(r||[]))})};
+  const submitDispute=(id)=>{if(!disputeReason)return toast('请填写申诉原因');
+    API.post(`/api/payslips/${id}/dispute`,{reason:disputeReason}).then(()=>{
+      toast('申诉已提交');setDisputeId(null);setDisputeReason('');
+      API.get('/api/mypage/payslips').then(r=>setPayslips(r||[]))})};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'card',style:{textAlign:'center',paddingBottom:20}},
       React.createElement('div',{style:{width:80,height:80,borderRadius:'50%',background:'var(--pri)',margin:'0 auto 12px',
@@ -422,14 +430,18 @@ const MyPage=({t,user})=>{
         React.createElement(SBadge,{s:emp.status}),' ',
         React.createElement('span',{className:'badge-s bg-blue'},emp.primary_wh))),
     React.createElement('div',{className:'tabs'},
-      [['info','基本信息'],['salary','薪资配置'],['timesheet','工时记录'],['leave','假期余额']].map(([k,l])=>
+      [['info','基本信息'],['salary','薪资配置'],['timesheet','工时记录'],['payslip','工资条'],['leave','假期余额']].map(([k,l])=>
         React.createElement('div',{key:k,className:`tab ${tab===k?'active':''}`,onClick:()=>setTab(k)},l))),
     tab==='info'&&React.createElement('div',{className:'card'},
       React.createElement('div',{className:'info-card'},
         [{l:'工号',v:emp.id},{l:'姓名',v:emp.name},{l:'职级',v:emp.grade},{l:'岗位',v:emp.position},
          {l:'主仓库',v:emp.primary_wh},{l:'派遣仓库',v:emp.dispatch_whs||'-'},{l:'来源',v:emp.source},
          {l:'入职日期',v:emp.join_date},{l:'电话',v:emp.phone||'-'},{l:'邮箱',v:emp.email||'-'},
-         {l:'国籍',v:emp.nationality},{l:'语言',v:emp.languages||'-'}
+         {l:'国籍',v:emp.nationality},{l:'性别',v:emp.gender||'-'},{l:'生日',v:emp.birth_date||'-'},
+         {l:'婚姻状况',v:emp.marital_status||'-'},{l:'税号',v:emp.tax_no||'-'},{l:'税级',v:emp.tax_class||'-'},
+         {l:'社保号',v:emp.ssn||'-'},{l:'医疗保险',v:emp.health_insurance||'-'},{l:'银行账号(IBAN)',v:emp.iban||'-'},
+         {l:'结算方式',v:emp.settle_method||'-'},{l:'每周工时',v:(emp.work_hours_per_week||40)+'h'},
+         {l:'语言',v:emp.languages||'-'},{l:'地址',v:emp.address||'-'}
         ].map((it,i)=>React.createElement('div',{key:i,className:'info-item'},
           React.createElement('div',{className:'label'},it.l),
           React.createElement('div',{className:'value'},it.v))))),
@@ -471,8 +483,35 @@ const MyPage=({t,user})=>{
             React.createElement('td',{style:{color:'var(--green)'}},`€${r.hourly_pay}`),
             React.createElement('td',{style:{fontWeight:600}},`€${r.net_pay}`),
             React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status})))))))),
+    tab==='payslip'&&React.createElement('div',{className:'card'},
+      React.createElement('h4',{style:{marginBottom:12}},'我的工资条'),
+      payslips.length===0?React.createElement('div',{className:'empty'},'暂无工资条'):
+      React.createElement('div',{className:'table-wrap'},
+        React.createElement('table',null,
+          React.createElement('thead',null,React.createElement('tr',null,
+            ['月份','总工时','应发','社保','税费','实发','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
+          React.createElement('tbody',null,payslips.map((p,i)=>React.createElement('tr',{key:i},
+            React.createElement('td',null,p.month),
+            React.createElement('td',null,p.total_hours?.toFixed(1)+'h'),
+            React.createElement('td',{style:{color:'var(--green)'}},`€${p.gross_pay?.toFixed(2)}`),
+            React.createElement('td',null,`€${p.ssi_deduct?.toFixed(2)}`),
+            React.createElement('td',null,`€${p.tax_deduct?.toFixed(2)}`),
+            React.createElement('td',{style:{fontWeight:700}},`€${p.net_pay?.toFixed(2)}`),
+            React.createElement('td',null,React.createElement(SBadge,{s:p.status})),
+            React.createElement('td',null,
+              p.status==='待确认'&&React.createElement('button',{className:'btn-sm',onClick:()=>confirmPayslip(p.id)},'✓ 确认'),
+              p.status!=='申诉中'&&React.createElement('button',{className:'btn-sm',style:{marginLeft:4,background:'var(--red)'},
+                onClick:()=>setDisputeId(p.id)},'申诉'))))))),
+      disputeId&&React.createElement('div',{className:'modal-overlay',onClick:()=>setDisputeId(null)},
+        React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+          React.createElement('h3',null,'薪资申诉'),
+          React.createElement('textarea',{className:'input',rows:4,placeholder:'请描述申诉原因...',
+            value:disputeReason,onChange:e=>setDisputeReason(e.target.value)}),
+          React.createElement('div',{style:{display:'flex',gap:8,marginTop:12,justifyContent:'flex-end'}},
+            React.createElement('button',{className:'btn ghost',onClick:()=>setDisputeId(null)},'取消'),
+            React.createElement('button',{className:'btn',onClick:()=>submitDispute(disputeId)},'提交申诉'))))),
     tab==='leave'&&React.createElement('div',{className:'card'},
-      React.createElement('h4',{style:{marginBottom:12}},'2026年假期余额'),
+      React.createElement('h4',{style:{marginBottom:12}},'假期余额'),
       React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))',gap:12}},
         data.leave_balances.map((lb,i)=>React.createElement('div',{key:i,style:{background:'var(--bg)',padding:16,borderRadius:8,textAlign:'center'}},
           React.createElement('div',{style:{fontSize:13,color:'var(--text2)',marginBottom:8}},leaveMap[lb.leave_type]||lb.leave_type),
@@ -748,6 +787,7 @@ const GradePage=({t})=>{
 // ══════ Timesheet ══════
 const TSPage=({t})=>{
   const[ts,setTs]=useState([]);const[showEdit,setShowEdit]=useState(null);const[emps,setEmps]=useState([]);const[whs,setWhs]=useState([]);
+  const[selIds,setSelIds]=useState([]);
   useEffect(()=>{API.get('/api/timesheet').then(setTs);API.get('/api/employees').then(setEmps);API.get('/api/warehouses').then(setWhs);},[]);
   const save=async()=>{
     if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/timesheet',d);}
@@ -756,17 +796,29 @@ const TSPage=({t})=>{
   };
   const doExport=async()=>{const r=await API.get('/api/export/timesheet');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='timesheet.json';a.click();showToast('导出成功');}};
   const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/timesheet',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/timesheet').then(setTs);}catch(err){showToast('导入失败: '+err.message,'error');}};inp.click();};
+  const batchApprove=(type)=>{if(!selIds.length)return showToast('请先选择记录');
+    API.post('/api/timesheet/batch-approve',{ids:selIds,type}).then(()=>{showToast('审批成功');setSelIds([]);API.get('/api/timesheet').then(setTs)})};
+  const toggleSel=(id)=>setSelIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+  const toggleAll=()=>{const visible=ts.slice(0,100).map(r=>r.id);setSelIds(selIds.length===visible.length?[]:visible)};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
       React.createElement('button',{className:'btn btn-pri',onClick:()=>{const now=new Date().toISOString().slice(0,10);setShowEdit({_isNew:true,employee_id:'',employee_name:'',work_date:now,warehouse_code:'',start_time:'08:00',end_time:'17:00',hours:8,position:'库内',grade:'P1',settle_method:'按小时',base_rate:12,hourly_pay:96,notes:''});}},'新增工时'),
       React.createElement('button',{className:'btn btn-ghost',onClick:doExport},'📤 导出'),
-      React.createElement('button',{className:'btn btn-ghost',onClick:doImport},'📥 导入')),
+      React.createElement('button',{className:'btn btn-ghost',onClick:doImport},'📥 导入'),
+      selIds.length>0&&React.createElement(React.Fragment,null,
+        React.createElement('span',{style:{margin:'0 8px',color:'var(--text2)',fontSize:13}},`已选 ${selIds.length} 条`),
+        React.createElement('button',{className:'btn-sm',style:{background:'var(--cyan)'},onClick:()=>batchApprove('leader')},'班组长审批'),
+        React.createElement('button',{className:'btn-sm',style:{background:'var(--pri)'},onClick:()=>batchApprove('wh')},'驻仓经理审批'),
+        React.createElement('button',{className:'btn-sm',style:{background:'#f59e0b'},onClick:()=>batchApprove('regional')},'区域经理审批'),
+        React.createElement('button',{className:'btn-sm',style:{background:'var(--green)'},onClick:()=>batchApprove('fin')},'财务确认'))),
     React.createElement('div',{style:{marginBottom:8,color:'var(--text2)',fontSize:13}},`共 ${ts.length} 条记录`),
     React.createElement('div',{className:'table-wrap'},
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
+          React.createElement('th',null,React.createElement('input',{type:'checkbox',checked:selIds.length===ts.slice(0,100).length&&ts.length>0,onChange:toggleAll})),
           ['日期','员工','职级','仓库','岗位','时段','工时','时薪','应付','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
         React.createElement('tbody',null,ts.slice(0,100).map(r=>React.createElement('tr',{key:r.id},
+          React.createElement('td',null,React.createElement('input',{type:'checkbox',checked:selIds.includes(r.id),onChange:()=>toggleSel(r.id)})),
           React.createElement('td',null,r.work_date),React.createElement('td',null,r.employee_name),
           React.createElement('td',{style:{color:gradeColor(r.grade),fontWeight:700}},r.grade),
           React.createElement('td',null,r.warehouse_code),
@@ -1306,6 +1358,63 @@ const AdminPage=({t,user})=>{
             React.createElement('span',{style:{fontSize:16}},p[k]?'✅':'❌')))))))));
 };
 
+// ══════ Payroll Preview (发薪预览) ══════
+const PayrollPreviewPage=({t})=>{
+  const[month,setMonth]=useState(new Date().toISOString().slice(0,7));
+  const[preview,setPreview]=useState(null);const[loading,setLoading]=useState(false);
+  const STEPS=['leader','wh_manager','regional_manager','finance'];
+  const STEP_LABELS={leader:'班组长',wh_manager:'驻仓经理',regional_manager:'区域经理',finance:'财务总监'};
+  const load=()=>{setLoading(true);API.get(`/api/payroll-preview?month=${month}`).then(r=>{setPreview(r);setLoading(false)})};
+  useEffect(load,[month]);
+  const genPayslips=()=>{API.post('/api/payslips/generate',{month}).then(r=>{toast(`已生成 ${r.count} 条工资条`);load()})};
+  const approveStep=(step)=>{API.post('/api/payroll-confirmations',{month,step}).then(()=>{toast(`${STEP_LABELS[step]}已审批`);load()})};
+  const getStepStatus=(step)=>{const c=preview?.confirmations?.find(c=>c.step===step);return c?c.status:'待审批'};
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'flex',style:{justifyContent:'space-between',alignItems:'center',marginBottom:16}},
+      React.createElement('h3',null,'发薪预览 - ',month),
+      React.createElement('div',{style:{display:'flex',gap:8,alignItems:'center'}},
+        React.createElement('input',{type:'month',className:'input',value:month,onChange:e=>setMonth(e.target.value),style:{width:160}}),
+        React.createElement('button',{className:'btn',onClick:genPayslips},'生成工资条'))),
+    React.createElement('div',{className:'card',style:{marginBottom:16}},
+      React.createElement('h4',{style:{marginBottom:12}},'审批流程'),
+      React.createElement('div',{style:{display:'flex',gap:12,flexWrap:'wrap'}},
+        STEPS.map((step,i)=>{
+          const st=getStepStatus(step);
+          return React.createElement('div',{key:step,style:{flex:1,minWidth:160,padding:12,borderRadius:8,textAlign:'center',
+            background:st==='已审批'?'rgba(34,197,94,.1)':'var(--bg)'}},
+            React.createElement('div',{style:{fontSize:13,fontWeight:600}},STEP_LABELS[step]),
+            React.createElement('div',{style:{margin:'8px 0'}},React.createElement(SBadge,{s:st})),
+            st!=='已审批'&&React.createElement('button',{className:'btn-sm',onClick:()=>approveStep(step)},
+              i<STEPS.length-1?'审批':'最终确认'),
+            i<STEPS.length-1&&React.createElement('span',{style:{position:'absolute',right:-10,fontSize:16}},''))}))),
+    preview&&React.createElement('div',{className:'stats',style:{marginBottom:16}},
+      [{n:preview.total_count,l:'总人数',c:'var(--pri)'},
+       {n:`€${preview.total_gross?.toFixed(2)}`,l:'总应发',c:'var(--green)'},
+       {n:`€${preview.total_net?.toFixed(2)}`,l:'总实发',c:'var(--cyan)'}
+      ].map((s,i)=>React.createElement('div',{key:i,className:'stat'},
+        React.createElement('div',{className:'num',style:{color:s.c}},s.n),
+        React.createElement('div',{className:'label'},s.l)))),
+    loading?React.createElement('div',{className:'empty'},'加载中...'):
+    preview&&React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['员工','职级','主仓库','出勤天数','总工时','时薪合计','计件合计','绩效','其他','应发','社保','税费','实发'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,(preview.employees||[]).map((r,i)=>React.createElement('tr',{key:i},
+          React.createElement('td',null,r.name),
+          React.createElement('td',{style:{color:gradeColor(r.grade)}},r.grade),
+          React.createElement('td',null,r.primary_wh),
+          React.createElement('td',null,r.work_days),
+          React.createElement('td',null,r.total_hours?.toFixed(1)+'h'),
+          React.createElement('td',null,`€${r.total_hourly?.toFixed(2)}`),
+          React.createElement('td',null,`€${r.total_piece?.toFixed(2)}`),
+          React.createElement('td',null,`€${r.total_perf?.toFixed(2)}`),
+          React.createElement('td',null,`€${r.total_other?.toFixed(2)}`),
+          React.createElement('td',{style:{color:'var(--green)',fontWeight:600}},`€${r.gross_pay?.toFixed(2)}`),
+          React.createElement('td',null,`-€${r.total_ssi?.toFixed(2)}`),
+          React.createElement('td',null,`-€${r.total_tax?.toFixed(2)}`),
+          React.createElement('td',{style:{fontWeight:700,color:'var(--green)'}},`€${r.net_pay?.toFixed(2)}`)))))));
+};
+
 // ══════ Main App ══════
 const MENU = [
   {group:'个人',items:[
@@ -1334,6 +1443,7 @@ const MENU = [
   ]},
   {group:'财务&系统',items:[
     {key:'settlement',icon:'💶',label:'财务结算'},
+    {key:'payroll',icon:'📋',label:'发薪预览',roles:['admin','fin','mgr']},
     {key:'whsalary',icon:'🏭',label:'仓库薪资',roles:['admin','hr','mgr']},
     {key:'accounts',icon:'🔑',label:'账号管理',roles:['admin','hr','mgr']},
     {key:'clock',icon:'🕐',label:'打卡'},
@@ -1358,7 +1468,7 @@ const App=()=>{
     dashboard:DashPage, employees:EmpPage, grades:GradePage, performance:PerfPage,
     quotation:QuotePage, files:FilePage, leave:LeavePage, expense:ExpPage,
     timesheet:TSPage, settlement:SettPage, clock:ClockPage,
-    mypage:MyPage, accounts:AccountPage, whsalary:WHSalaryPage,
+    mypage:MyPage, accounts:AccountPage, whsalary:WHSalaryPage, payroll:PayrollPreviewPage,
     warehouse:WarehousePage, docs:DocsPage,
     suppliers:SuppliersPage, container:ContainerPage, schedule:SchedulePage,
     dispatch:DispatchPage, admin:AdminPage,
