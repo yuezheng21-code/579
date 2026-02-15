@@ -1,5 +1,5 @@
 """渊博+579 HR V6 — FastAPI Backend (Enhanced with Account Management & Warehouse Salary)"""
-import os, json, uuid, shutil, secrets, string
+import os, json, uuid, shutil, secrets, string, traceback
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
@@ -33,7 +33,6 @@ def on_startup():
         database.seed_data()
         database.ensure_demo_users()
     except Exception as e:
-        import traceback
         print(f"⚠️ Database initialization error: {e}")
         traceback.print_exc()
 
