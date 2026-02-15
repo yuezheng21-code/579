@@ -1,7 +1,7 @@
 """渊博+579 HR V6 — FastAPI Backend (Enhanced with Account Management & Warehouse Salary)"""
 import os, json, uuid, shutil, secrets, string, traceback, threading, logging, sys, copy, time, hashlib, hmac, base64
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -15,6 +15,10 @@ UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
+
+# German labor law compliance limits (ArbZG)
+MAX_DAILY_HOURS = 10   # §3 ArbZG: max 10 hours per day
+MAX_WEEKLY_HOURS = 48   # §3 ArbZG: max 48 hours per week (average)
 
 _db_ready = False
 
@@ -839,8 +843,8 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
 
     # ── German labor law compliance checks ──
     hours = float(data.get("hours", 0))
-    if hours > 10:
-        raise HTTPException(400, "根据德国劳动法(ArbZG)，每日工作时间不得超过10小时 / Tägliche Arbeitszeit darf 10 Stunden nicht überschreiten")
+    if hours > MAX_DAILY_HOURS:
+        raise HTTPException(400, f"根据德国劳动法(ArbZG)，每日工作时间不得超过{MAX_DAILY_HOURS}小时 / Tägliche Arbeitszeit darf {MAX_DAILY_HOURS} Stunden nicht überschreiten")
 
     employee_id = data.get("employee_id")
     work_date = data.get("work_date")
@@ -849,20 +853,19 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
     # Check weekly hours compliance (max 48h/week per German law)
     if employee_id and work_date:
         db = database.get_db()
-        # Calculate week start (Monday) for the given date
         from datetime import date as dt_date
         parts = work_date.split("-")
         d = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
-        week_start = (d - __import__('datetime').timedelta(days=d.weekday())).isoformat()
-        week_end = (d + __import__('datetime').timedelta(days=6 - d.weekday())).isoformat()
+        week_start = (d - timedelta(days=d.weekday())).isoformat()
+        week_end = (d + timedelta(days=6 - d.weekday())).isoformat()
         weekly = db.execute(
             "SELECT COALESCE(SUM(hours),0) as total FROM timesheet WHERE employee_id=? AND work_date>=? AND work_date<=?",
             (employee_id, week_start, week_end)
         ).fetchone()
         weekly_total = (weekly["total"] if weekly else 0) + hours
         db.close()
-        if weekly_total > 48:
-            raise HTTPException(400, f"该员工本周已工作{weekly_total-hours}小时，加上本次{hours}小时共{weekly_total}小时，超过德国劳动法48小时/周上限 / Wöchentliche Arbeitszeit würde 48 Stunden überschreiten")
+        if weekly_total > MAX_WEEKLY_HOURS:
+            raise HTTPException(400, f"该员工本周已工作{weekly_total-hours}小时，加上本次{hours}小时共{weekly_total}小时，超过德国劳动法{MAX_WEEKLY_HOURS}小时/周上限 / Wöchentliche Arbeitszeit würde {MAX_WEEKLY_HOURS} Stunden überschreiten")
 
     # 检查是否已存在相同的工时记录
     if employee_id and work_date and warehouse_code:
