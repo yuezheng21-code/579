@@ -381,9 +381,10 @@ const LoginPage=({onLogin,lang,setLang})=>{
 
 // ══════ Dashboard ══════
 const DashPage=({t})=>{
-  const[d,setD]=useState(null);
-  useEffect(()=>{API.get('/api/analytics/dashboard').then(setD)},[]);
+  const[d,setD]=useState(null);const[warnings,setWarnings]=useState([]);
+  useEffect(()=>{API.get('/api/analytics/dashboard').then(setD);API.get('/api/expiry-warnings').then(w=>setWarnings(w||[]));},[]);
   if(!d)return React.createElement('div',{className:'empty'},'加载中...');
+  const warnTypes={'work_permit':'工作许可','id_document':'证件','contract':'合同'};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'stats'},
       [{n:d.total_emp,l:'在职员工',c:'var(--pri)'},{n:d.own,l:'自有员工',c:'var(--green)'},
@@ -393,6 +394,14 @@ const DashPage=({t})=>{
       ].map((s,i)=>React.createElement('div',{key:i,className:'stat'},
         React.createElement('div',{className:'num',style:{color:s.c}},s.n),
         React.createElement('div',{className:'label'},s.l)))),
+    warnings.length>0&&React.createElement('div',{className:'card',style:{borderLeft:'4px solid var(--red)',marginBottom:12}},
+      React.createElement('h4',{style:{marginBottom:10,color:'var(--red)'}},'⚠️ 到期预警（三个月内）'),
+      React.createElement('div',{style:{display:'grid',gap:6}},
+        warnings.slice(0,10).map((w,i)=>React.createElement('div',{key:i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 10px',background:'var(--bg)',borderRadius:6,fontSize:12}},
+          React.createElement('span',null,`${w.name} (${w.id})`),
+          React.createElement('span',{style:{color:'var(--orange)'}},warnTypes[w.warning_type]||w.warning_type),
+          React.createElement('span',{style:{color:'var(--red)',fontWeight:600}},w.expiry_date))),
+        warnings.length>10&&React.createElement('div',{style:{fontSize:11,color:'var(--text3)',textAlign:'center'}},`还有 ${warnings.length-10} 条预警...`))),
     React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}},
       React.createElement('div',{className:'card'},
         React.createElement('h4',{style:{marginBottom:10}},'职级分布'),
@@ -706,13 +715,13 @@ const EmpPage=({t})=>{
     setShowEdit(null);API.get('/api/employees').then(setEmps);
   };
   const doExport=async()=>{const r=await API.get('/api/export/employees');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='employees.json';a.click();showToast('导出成功');}};
-  const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/employees',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}};inp.click();};
+  const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.csv,.xlsx,.xls,.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const ext=f.name.split('.').pop().toLowerCase();if(ext==='json'){const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/employees',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}}else{const form=new FormData();form.append('file',f);try{const resp=await fetch('/api/import-file/employees',{method:'POST',headers:{'Authorization':'Bearer '+localStorage.getItem('token')},body:form});const r=await resp.json();if(r.ok)showToast(`导入完成: ${r.success||0} 条成功, ${(r.errors||[]).length} 条失败`);else showToast('导入失败: '+(r.detail||'未知错误'),'error');API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}}};inp.click();};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
       React.createElement('input',{value:q,onChange:e=>setQ(e.target.value),placeholder:'🔍 搜索姓名/工号/职级...'}),
       React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,name:'',phone:'',email:'',grade:'P1',position:'库内',primary_wh:'',source:'自有',status:'在职',gender:'男',nationality:'CN',contract_type:'劳动合同',dispatch_type:'',department:'',biz_line:'渊博',settle_method:'按小时',dispatch_whs:'',contract_start:'',contract_end:'',join_date:''})},'新增员工'),
       React.createElement('button',{className:'btn btn-ghost',onClick:doExport},'📤 导出'),
-      React.createElement('button',{className:'btn btn-ghost',onClick:doImport},'📥 导入')),
+      React.createElement('button',{className:'btn btn-ghost',onClick:doImport},'📥 导入 (CSV/Excel)')),
     React.createElement('div',{className:'table-wrap'},
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
@@ -750,6 +759,19 @@ const EmpPage=({t})=>{
           React.createElement('div',{className:'form-field'},React.createElement('label',null,'婚姻状况 / Familienstand'),
             React.createElement('select',{value:showEdit.marital_status||'',onChange:e=>setShowEdit({...showEdit,marital_status:e.target.value})},
               ['','未婚','已婚','离异','丧偶'].map(s=>React.createElement('option',{key:s,value:s},s||'请选择'))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'证件类型 / Ausweistyp'),
+            React.createElement('select',{value:showEdit.id_type||'护照',onChange:e=>setShowEdit({...showEdit,id_type:e.target.value})},
+              ['护照','身份证','居留证','驾照','其他'].map(t=>React.createElement('option',{key:t,value:t},t)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'证件号码 / Ausweis-Nr.'),
+            React.createElement('input',{value:showEdit.id_number||'',onChange:e=>setShowEdit({...showEdit,id_number:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'证件有效期 / Ausweis gültig bis'),
+            React.createElement('input',{type:'date',value:showEdit.id_expiry_date||'',onChange:e=>setShowEdit({...showEdit,id_expiry_date:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'工作许可号 / Arbeitserlaubnis-Nr.'),
+            React.createElement('input',{value:showEdit.work_permit_no||'',onChange:e=>setShowEdit({...showEdit,work_permit_no:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'工作许可有效期 / Arbeitserlaubnis gültig bis'),
+            React.createElement('input',{type:'date',value:showEdit.work_permit_expiry||'',onChange:e=>setShowEdit({...showEdit,work_permit_expiry:e.target.value})}))),
         React.createElement('div',{className:'form-row'},
           React.createElement('div',{className:'form-field',style:{flex:2}},React.createElement('label',null,'地址 / Adresse'),
             React.createElement('input',{value:showEdit.address||'',onChange:e=>setShowEdit({...showEdit,address:e.target.value})})),
@@ -1142,6 +1164,8 @@ const FilePage=({t})=>{
   useEffect(()=>{API.get('/api/files').then(setF);API.get('/api/employees').then(setE);},[]);
   const empNames=Object.fromEntries(emps.map(e=>[e.id,e.name]));
   const grouped=files.reduce((a,f)=>{(a[f.employee_id]=a[f.employee_id]||[]).push(f);return a;},{});
+  const downloadFile=(fileId,fileName)=>{const a=document.createElement('a');a.href=`/api/files/${fileId}/download`;a.download=fileName||'download';a.style.display='none';const token=localStorage.getItem('token');fetch(`/api/files/${fileId}/download`,{headers:{'Authorization':'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('下载失败');return r.blob();}).then(blob=>{const url=URL.createObjectURL(blob);a.href=url;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);}).catch(e=>showToast(e.message,'error'));};
+  const downloadFolder=(eid)=>{const token=localStorage.getItem('token');fetch(`/api/files/download-folder/${eid}`,{headers:{'Authorization':'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('下载失败');return r.blob();}).then(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${empNames[eid]||eid}_files.zip`;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);}).catch(e=>showToast(e.message,'error'));};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
       React.createElement('select',{value:selEmp,onChange:e=>setSel(e.target.value),
@@ -1150,11 +1174,14 @@ const FilePage=({t})=>{
         emps.map(e=>React.createElement('option',{key:e.id,value:e.id},`${e.id} ${e.name}`)))),
     Object.entries(grouped).filter(([eid])=>!selEmp||eid===selEmp).map(([eid,fs])=>
       React.createElement('div',{key:eid,className:'card'},
-        React.createElement('div',{style:{fontWeight:700,marginBottom:8}},`📁 ${empNames[eid]||eid} 的档案`),
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+          React.createElement('div',{style:{fontWeight:700}},`📁 ${empNames[eid]||eid} 的档案`),
+          React.createElement('button',{className:'btn btn-ghost',style:{fontSize:11,padding:'4px 10px'},onClick:()=>downloadFolder(eid)},'📦 打包下载')),
         React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:8}},
           fs.map(f=>React.createElement('div',{key:f.id,style:{background:'var(--bg)',padding:'8px 12px',borderRadius:6,fontSize:12,border:'1px solid var(--border)'}},
             React.createElement('div',null,f.confidential?'🔒':'📄',' ',f.file_name),
-            React.createElement('div',{style:{color:'var(--text3)',marginTop:2}},`${f.category} · ${f.stage} · ${f.upload_date}`)))))));
+            React.createElement('div',{style:{color:'var(--text3)',marginTop:2}},`${f.category} · ${f.stage} · ${f.upload_date}`),
+            React.createElement('button',{style:{marginTop:4,fontSize:11,color:'var(--blue)',background:'none',border:'none',cursor:'pointer',padding:0},onClick:()=>downloadFile(f.id,f.file_name)},'⬇ 下载')))))));
 };
 
 // ══════ Warehouse Management ══════

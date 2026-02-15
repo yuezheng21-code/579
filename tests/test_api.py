@@ -3420,3 +3420,189 @@ async def test_payroll_summary_default_month(auth_headers):
         r = await ac.get("/api/payroll-summary", headers=auth_headers)
     assert r.status_code == 200
     assert isinstance(r.json(), list)
+
+
+# ── Tests for new employee ID expiry, expiry warnings, file access, download, CSV import ──
+
+@pytest.mark.asyncio
+async def test_roster_stats_includes_id_expiring_soon(auth_headers):
+    """Roster stats should include id_expiring_soon field."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/roster/stats", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert "id_expiring_soon" in data
+    assert "work_permit_expiring_soon" in data
+    assert "contract_expiring_soon" in data
+
+
+@pytest.mark.asyncio
+async def test_expiry_warnings_endpoint(auth_headers):
+    """Test the consolidated expiry warnings endpoint."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/expiry-warnings", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+
+
+@pytest.mark.asyncio
+async def test_expiry_warnings_with_expiring_employee(auth_headers):
+    """Test expiry warnings returns employees with documents expiring within 3 months."""
+    transport = ASGITransport(app=app)
+    from datetime import datetime, timedelta
+    soon = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create employee with expiring work permit
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "测试到期", "work_permit_expiry": soon,
+                                "work_permit_no": "WP-TEST", "nationality": "US"})
+        assert r.status_code == 200
+        # Check warnings
+        r = await ac.get("/api/expiry-warnings", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert any(w["name"] == "测试到期" and w["warning_type"] == "work_permit" for w in data)
+
+
+@pytest.mark.asyncio
+async def test_expiry_warnings_id_expiry(auth_headers):
+    """Test expiry warnings for ID document expiry."""
+    transport = ASGITransport(app=app)
+    from datetime import datetime, timedelta
+    soon = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d")
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "证件到期测试", "id_expiry_date": soon,
+                                "id_type": "护照", "id_number": "TEST123"})
+        assert r.status_code == 200
+        r = await ac.get("/api/expiry-warnings", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert any(w["name"] == "证件到期测试" and w["warning_type"] == "id_document" for w in data)
+
+
+@pytest.mark.asyncio
+async def test_employee_id_expiry_date_field(auth_headers):
+    """Test creating and retrieving employee with id_expiry_date."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "证件测试", "id_type": "护照",
+                                "id_number": "P123456", "id_expiry_date": "2026-12-31"})
+        assert r.status_code == 200
+        eid = r.json()["id"]
+        r = await ac.get(f"/api/employees/{eid}", headers=auth_headers)
+    assert r.status_code == 200
+    emp = r.json()
+    assert emp["id_expiry_date"] == "2026-12-31"
+    assert emp["id_type"] == "护照"
+    assert emp["id_number"] == "P123456"
+
+
+@pytest.mark.asyncio
+async def test_file_download_not_found(auth_headers):
+    """Test downloading non-existent file returns 404."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/files/NONEXIST/download", headers=auth_headers)
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_folder_download_no_files(auth_headers):
+    """Test downloading folder for employee with no files returns 404."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/files/download-folder/YB-NONEXIST", headers=auth_headers)
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_import_file_csv(auth_headers):
+    """Test importing employees via CSV file upload."""
+    import io
+    csv_content = "姓名,职级,状态\nCSV测试员工1,P1,在职\nCSV测试员工2,P2,在职\n"
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import-file/employees", headers=auth_headers,
+                          files={"file": ("test.csv", io.BytesIO(csv_content.encode("utf-8-sig")), "text/csv")})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["success"] == 2
+
+
+@pytest.mark.asyncio
+async def test_import_file_csv_with_english_headers(auth_headers):
+    """Test importing employees via CSV with English field headers."""
+    import io
+    csv_content = "name,grade,status\nEnglishCSV1,P1,在职\nEnglishCSV2,P2,在职\n"
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import-file/employees", headers=auth_headers,
+                          files={"file": ("test.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["success"] == 2
+
+
+@pytest.mark.asyncio
+async def test_import_file_invalid_table(auth_headers):
+    """Test importing to invalid table returns 400."""
+    import io
+    csv_content = "name\ntest\n"
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import-file/invalid_table", headers=auth_headers,
+                          files={"file": ("test.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_import_file_permission_denied(worker_headers):
+    """Worker cannot import via file upload."""
+    import io
+    csv_content = "姓名\n测试\n"
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import-file/employees", headers=worker_headers,
+                          files={"file": ("test.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_import_file_xlsx(auth_headers):
+    """Test importing employees via Excel (.xlsx) file."""
+    import io
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["姓名", "职级", "状态"])
+    ws.append(["Excel测试1", "P1", "在职"])
+    ws.append(["Excel测试2", "P2", "在职"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import-file/employees", headers=auth_headers,
+                          files={"file": ("test.xlsx", buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["success"] == 2
+
+
+@pytest.mark.asyncio
+async def test_export_employees_includes_id_expiry(auth_headers):
+    """Test that employee export includes id_expiry_date field."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/employees", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert "id_expiry_date" in data["fields"]
