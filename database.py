@@ -354,6 +354,15 @@ def init_db():
         marital_status TEXT,           -- 婚姻状况
         children_count INTEGER DEFAULT 0, -- 子女数量
         secondary_job INTEGER DEFAULT 0,  -- 是否有副业 (0 无, 1 有)
+        -- 花名册增强: 合同与派遣信息
+        contract_type TEXT DEFAULT '劳动合同',  -- 合同类型 (劳动合同/劳务合同/兼职合同)
+        dispatch_type TEXT,                      -- 派遣类型 (纯派遣/流程承包/区块承包/整仓承包)
+        contract_start TEXT,                     -- 合同开始日期
+        contract_end TEXT,                       -- 合同结束日期
+        emergency_contact TEXT,                  -- 紧急联系人
+        emergency_phone TEXT,                    -- 紧急联系人电话
+        work_permit_no TEXT,                     -- 工作许可证号
+        work_permit_expiry TEXT,                 -- 工作许可证到期日
         annual_leave_days REAL DEFAULT 20, sick_leave_days REAL DEFAULT 30,
         status TEXT DEFAULT '在职', join_date TEXT, leave_date TEXT, pin TEXT,
         file_folder TEXT, has_account INTEGER DEFAULT 0,
@@ -365,9 +374,16 @@ def init_db():
         settle_cycle TEXT DEFAULT '月结', currency TEXT DEFAULT 'EUR',
         contact_name TEXT, contact_phone TEXT, contact_email TEXT, address TEXT,
         tax_handle TEXT DEFAULT '供应商自行报税',
+        -- 供应商模块增强
+        service_scope TEXT,                      -- 服务范围
+        dispatch_types TEXT,                     -- 可提供派遣类型 (JSON: ["纯派遣","流程承包"...])
+        bank_name TEXT,                          -- 开户银行
+        bank_account TEXT,                       -- 银行账号
+        max_headcount INTEGER DEFAULT 0,         -- 最大供应人数
+        current_headcount INTEGER DEFAULT 0,     -- 当前在岗人数
         status TEXT DEFAULT '合作中', rating TEXT DEFAULT 'B', notes TEXT,
         created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))""",
-    # ── Warehouses ──
+    # ── Warehouses (客户仓库 - 第三方劳务派遣) ──
     """CREATE TABLE IF NOT EXISTS warehouses (
         code TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT,
         manager TEXT, phone TEXT, client_name TEXT, project_no TEXT,
@@ -376,8 +392,15 @@ def init_db():
         unload_20gp REAL DEFAULT 150, unload_40gp REAL DEFAULT 280, unload_45hc REAL DEFAULT 330,
         emp_cols TEXT, ts_cols TEXT, export_freq TEXT DEFAULT 'Monthly', export_lang TEXT DEFAULT 'zh',
         created_at TEXT DEFAULT (datetime('now')),
-        tax_number TEXT, contact_person TEXT, cooperation_mode TEXT DEFAULT '自营',
-        contact_email TEXT, contact_phone_2 TEXT, updated_at TEXT DEFAULT (datetime('now')))""",
+        tax_number TEXT, contact_person TEXT, cooperation_mode TEXT DEFAULT '第三方派遣',
+        contact_email TEXT, contact_phone_2 TEXT,
+        -- 仓库管理增强: 派遣服务类型
+        service_type TEXT DEFAULT '纯派遣',      -- 服务类型 (纯派遣/流程承包/区块承包/整仓承包)
+        contract_start_date TEXT,                -- 服务合同开始日期
+        contract_end_date TEXT,                  -- 服务合同结束日期
+        headcount_quota INTEGER DEFAULT 0,       -- 合同约定人数
+        current_headcount INTEGER DEFAULT 0,     -- 当前派遣人数
+        updated_at TEXT DEFAULT (datetime('now')))""",
     # ── NEW: Warehouse Salary Config - 仓库薪资配置表 ──
     """CREATE TABLE IF NOT EXISTS warehouse_salary_config (
         id TEXT PRIMARY KEY,
@@ -472,7 +495,9 @@ def init_db():
         can_view INTEGER DEFAULT 0, can_create INTEGER DEFAULT 0,
         can_edit INTEGER DEFAULT 0, can_delete INTEGER DEFAULT 0,
         can_export INTEGER DEFAULT 0, can_approve INTEGER DEFAULT 0,
+        can_import INTEGER DEFAULT 0,
         hidden_fields TEXT DEFAULT '',
+        editable_fields TEXT DEFAULT '',
         updated_by TEXT, updated_at TEXT DEFAULT (datetime('now')),
         UNIQUE(role, module))""",
     """CREATE TABLE IF NOT EXISTS audit_logs (
@@ -539,6 +564,8 @@ def ensure_demo_users():
     """确保演示账号可用（用于部署后角色测试）"""
     demo_users = [
         ("admin", "admin123", "系统管理员", "admin"),
+        ("ceo_wb", "ceo123", "王博(CEO)", "ceo"),
+        ("ceo_yly", "ceo123", "袁梁毅(CEO)", "ceo"),
         ("hr", "hr123", "赵慧(HR)", "hr"),
         ("mgr579", "579pass", "张伟(579)", "mgr"),
         ("fin", "fin123", "孙琳(财务)", "fin"),
@@ -647,7 +674,9 @@ def seed_data():
 
     # ── Users ──
     for u in [
-        ("admin","admin123","系统管理员","admin"),("hr","hr123","赵慧(HR)","hr"),
+        ("admin","admin123","系统管理员","admin"),
+        ("ceo_wb","ceo123","王博(CEO)","ceo"),("ceo_yly","ceo123","袁梁毅(CEO)","ceo"),
+        ("hr","hr123","赵慧(HR)","hr"),
         ("wh_una","una123","王磊(UNA)","wh"),("wh_dhl","dhl123","李娜(DHL)","wh"),
         ("finance","fin123","孙琳(财务)","fin"),("sup001","sup123","陈刚(德信)","sup"),
         ("mgr579","579pass","张伟(579)","mgr"),("worker1","w123","张三","worker"),
@@ -656,45 +685,60 @@ def seed_data():
                   (u[0],hash_password(u[1]),u[2],u[3]))
 
     # ── Permissions ──
+    # Roles hierarchy: admin (god view, highest) > ceo > mgr > hr > fin > wh > sup > worker
     ALL_M = ["dashboard","employees","suppliers","talent","dispatch","recruit",
              "timesheet","settlement","warehouse","schedule","templates",
              "clock","container","messages","analytics","admin","logs",
              "grades","quotation","files","leave","expense","performance",
              "mypage","accounts","whsalary"]
+    # role_perm: (can_view, can_create, can_edit, can_delete, can_export, can_approve, can_import)
     role_perm = {
-        "admin": (ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M),
+        "admin": (ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M),
+        "ceo": (ALL_M,
+                ["employees","suppliers","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","timesheet"],
+                ["employees","suppliers","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","leave","expense"],
+                ["employees","suppliers","talent","dispatch","recruit"],
+                ALL_M,
+                ALL_M,
+                ["employees","suppliers","timesheet","talent","dispatch","performance"]),
         "hr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                 "schedule","templates","messages","analytics","grades","files","leave","expense","performance","accounts","whsalary"],
                ["employees","suppliers","talent","dispatch","recruit","schedule","files","leave","expense","grades","performance","accounts","whsalary"],
                ["employees","suppliers","talent","dispatch","recruit","schedule","timesheet","grades","leave","performance","accounts","whsalary"],
-               [],[],["leave","expense"]),
+               [],
+               ["employees","suppliers","talent","timesheet","leave","expense","performance"],
+               ["leave","expense"],
+               ["employees","suppliers","talent","timesheet"]),
         "wh": (["dashboard","employees","timesheet","warehouse","schedule","clock","container","messages","leave","mypage"],
-               ["container","schedule"],["container","schedule"],[],["timesheet","container"],["timesheet","container"]),
+               ["container","schedule"],["container","schedule"],[],["timesheet","container"],["timesheet","container"],[]),
         "fin": (["dashboard","employees","timesheet","settlement","suppliers","analytics","expense","quotation"],
-               [],[],[],["timesheet","settlement","analytics","expense"],["timesheet","expense"]),
-        "sup": (["dashboard","employees","timesheet","settlement"],[],[],[],[],[]),
+               [],[],[],["timesheet","settlement","analytics","expense"],["timesheet","expense"],[]),
+        "sup": (["dashboard","employees","timesheet","settlement"],[],[],[],[],[],[]),
         "mgr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                  "warehouse","schedule","templates","clock","container","messages","analytics",
                  "grades","quotation","files","leave","expense","performance","accounts","whsalary"],
                 ["employees","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary"],
                 ["employees","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary"],
-                [],[],["leave","quotation"]),
-        "worker": (["clock","container","schedule","leave","expense","mypage"],["container","leave","expense"],[],[],[],[]),
+                [],
+                ["employees","timesheet","performance"],
+                ["leave","quotation"],
+                ["employees","timesheet"]),
+        "worker": (["clock","container","schedule","leave","expense","mypage"],["container","leave","expense"],[],[],[],[],[]),
     }
-    for role,(v,cr,ed,dl,ex,ap) in role_perm.items():
+    for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
         for mod in ALL_M:
-            c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,hidden_fields)
-                VALUES(?,?,?,?,?,?,?,?,?)
+            c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,can_import,hidden_fields,editable_fields)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(role, module) DO NOTHING""",
-                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),""))
+                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),"",""))
 
-    # ── Warehouses ──
-    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","自营","una@example.com","",""),
-              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","合作派遣","dhl@example.com","",""),
-              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","自营","579@example.com","",""),
-              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","外包","cma@example.com","",""),
-              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","合作派遣","emr@example.com","","")]:
-        c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*27)+")", w)
+    # ── Warehouses (客户仓库 - 第三方劳务派遣) ──
+    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,""),
+              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","第三方派遣","dhl@example.com","","纯派遣","2025-03-01","2026-06-30",15,10,""),
+              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","第三方派遣","579@example.com","","流程承包","2025-06-01","2026-12-31",20,12,""),
+              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,""),
+              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"")]:
+        c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*len(w))+")", w)
 
     # ── NEW: Warehouse Salary Config ──
     wh_salary_configs = [
@@ -733,28 +777,29 @@ def seed_data():
             ON CONFLICT(id) DO NOTHING""", wsc)
 
     # ── Suppliers ──
-    for s in [("SUP-001","德信人力","人力供应商","渊博","CT-2025-001","2025-01-01","2026-12-31","月结","EUR","陈刚","+49-176-2001","chen@dexin.de","Köln","供应商自行报税","合作中","A",""),
-              ("SUP-002","欧华劳务","人力供应商","渊博","CT-2025-002","2025-03-01","2026-06-30","半月结","EUR","赵丽","+49-176-2002","zhao@ouhua.de","Düsseldorf","我方代报税","合作中","B",""),
-              ("SUP-003","环球人才","人力供应商","579","CT-2025-003","2025-06-01","2026-12-31","月结","EUR","孙明","+49-176-2003","sun@global.de","Duisburg","供应商自行报税","合作中","A","")]:
-        c.execute("INSERT INTO suppliers VALUES("+",".join(["?"]*19)+")", s+("",""))
+    for s in [("SUP-001","德信人力","人力供应商","渊博","CT-2025-001","2025-01-01","2026-12-31","月结","EUR","陈刚","+49-176-2001","chen@dexin.de","Köln","供应商自行报税","仓内操作,装卸柜",'["纯派遣","流程承包"]',"Sparkasse Köln","DE89370400440532013100",50,15,"合作中","A",""),
+              ("SUP-002","欧华劳务","人力供应商","渊博","CT-2025-002","2025-03-01","2026-06-30","半月结","EUR","赵丽","+49-176-2002","zhao@ouhua.de","Düsseldorf","我方代报税","装卸柜,叉车",'["纯派遣"]',"Deutsche Bank","DE89370400440532013200",30,8,"合作中","B",""),
+              ("SUP-003","环球人才","人力供应商","579","CT-2025-003","2025-06-01","2026-12-31","月结","EUR","孙明","+49-176-2003","sun@global.de","Duisburg","供应商自行报税","仓内操作,装卸柜,管理",'["纯派遣","整仓承包"]',"Commerzbank","DE89370400440532013300",40,10,"合作中","A","")]:
+        sup_data = s+("","")
+        c.execute("INSERT INTO suppliers VALUES("+",".join(["?"]*len(sup_data))+")", sup_data)
 
     # ── Employees ──
     emps = [
-        ("YB-001","张三","+49-176-0001","zh.san@mail.de","CN","男","1990-05-15","护照","E12345001","Hamburg 45","自有",None,"渊博","运营部","UNA","UNA,DHL","装卸","P2","P2","按小时",12.5,13.0,0,0,"我方报税","T001","12345678901","1","SS-001","DE89370400440532013000","AOK","中,德","叉车证",20,30,"在职","2025-03-15",None,"1001","YB-001",0),
-        ("YB-002","李四","+49-176-0002","li.si@mail.de","CN","男","1988-11-20","护照","E12345002","Berlin 12","自有",None,"渊博","运营部","DHL","DHL,UNA","库内","P2","P2","按小时",12.5,12.0,0,0,"我方报税","T002","23456789012","1","SS-002","DE89370400440532013001","TK","中,英",None,20,30,"在职","2025-06-01",None,"1002","YB-002",0),
-        ("YB-003","王五","+49-176-0003",None,"VN","男","1992-03-10","签证","E12345003","Hamburg 78","供应商","SUP-001","渊博","运营部","UNA","UNA","装卸","P0","P0","按小时",11.0,11.0,0,0,"供应商报税","","","","","","","越,德",None,20,30,"在职","2025-09-01",None,"1003","YB-003",0),
-        ("YB-004","阮氏花","+49-176-0004",None,"VN","女","1995-07-22","签证","E12345004","Hamburg 90","供应商","SUP-001","渊博","运营部","UNA","UNA","库内","P0","P0","按件",11.0,11.0,0,0,"供应商报税","","","","","","","越",None,20,30,"在职","2025-10-15",None,"1004","YB-004",0),
-        ("YB-005","陈大明","+49-176-0005",None,"CN","男","1985-01-30","护照","E12345005","Berlin 56","供应商","SUP-002","渊博","运营部","DHL","DHL,CMA","装卸","P3","P3","按柜",13.5,13.5,0,0,"我方报税","T005","34567890123","3","SS-005","DE55556666777788889999","AOK","中,德,英","叉车证",20,30,"在职","2024-06-01",None,"1005","YB-005",0),
-        ("YB-006","刘芳","+49-176-0006",None,"CN","女","1993-09-08","护照","E12345006","Frankfurt 34","自有",None,"579","运营部","W579","W579","库内","P2","P2","按小时",12.5,12.0,0,0,"我方报税","T006","45678901234","1","SS-006","DE66667777888899990000","AOK","中","健康证",20,30,"在职","2025-08-01",None,"1006","YB-006",0),
-        ("YB-007","黄强","+49-176-0007",None,"CN","男","1991-12-05","护照","E12345007","Frankfurt 67","供应商","SUP-003","579","运营部","W579","W579","装卸","P0","P0","按小时",11.0,12.0,0,0,"供应商报税","","","","","","","中",None,20,30,"在职","2026-01-10",None,"1007","YB-007",0),
-        ("YB-008","Maria K.","+49-176-0008",None,"DE","女","1994-04-18","身份证","DE-ID-008","Düsseldorf 22","自有",None,"渊博","运营部","DHL","DHL","库内","P2","P2","按小时",12.5,14.0,0,0,"我方报税","T008","56789012345","1","SS-008","DE89370400440532013007","TK","德,英",None,20,30,"在职","2025-04-01",None,"1008","YB-008",0),
-        ("YB-009","赵六","+49-176-0009",None,"CN","男","1987-08-25","护照","E12345009","Essen 15","供应商","SUP-001","渊博","运营部","CMA","CMA,EMR","装卸","P0","P0","按小时",11.0,12.5,0,0,"供应商报税","","","","","","","中,德","叉车证",20,30,"在职","2025-11-01",None,"1009","YB-009",0),
-        ("YB-010","武志强","+49-176-0010",None,"CN","男","1990-02-14","护照","E12345010","Emmerich 8","自有",None,"渊博","运营部","EMR","EMR,CMA","装卸","P4","P4","按小时",15.0,15.0,0,0,"我方报税","T010","67890123456","1","SS-010","DE89370400440532013009","AOK","中,德,英","叉车证",20,30,"在职","2024-01-15",None,"1010","YB-010",0),
-        ("YB-011","赵慧","+49-176-0020",None,"CN","女","1990-06-15","护照","E12345020","Köln 88","自有",None,"渊博","人事部","UNA","","HR专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T020","88901234567","1","SS-020","DE11112222333344445555","AOK","中,德,英","",20,30,"在职","2024-03-01",None,"2001","YB-011",0),
-        ("YB-012","孙琳","+49-176-0021",None,"CN","女","1988-03-20","护照","E12345021","Köln 99","自有",None,"渊博","财务部","UNA","","财务专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T021","99012345678","1","SS-021","DE22223333444455556666","TK","中,德","",20,30,"在职","2024-05-01",None,"2002","YB-012",0),
+        ("YB-001","张三","+49-176-0001","zh.san@mail.de","CN","男","1990-05-15","护照","E12345001","Hamburg 45","自有",None,"渊博","运营部","UNA","UNA,DHL","装卸","P2","P2","按小时",12.5,13.0,0,0,"我方报税","T001","12345678901","1","SS-001","DE89370400440532013000","AOK","中,德","叉车证","劳动合同","整仓承包","2025-03-15","2027-03-14","李梅","+49-176-9001",None,None,20,30,"在职","2025-03-15",None,"1001","YB-001",0),
+        ("YB-002","李四","+49-176-0002","li.si@mail.de","CN","男","1988-11-20","护照","E12345002","Berlin 12","自有",None,"渊博","运营部","DHL","DHL,UNA","库内","P2","P2","按小时",12.5,12.0,0,0,"我方报税","T002","23456789012","1","SS-002","DE89370400440532013001","TK","中,英",None,"劳动合同","纯派遣","2025-06-01","2027-05-31","王丽","+49-176-9002",None,None,20,30,"在职","2025-06-01",None,"1002","YB-002",0),
+        ("YB-003","王五","+49-176-0003",None,"VN","男","1992-03-10","签证","E12345003","Hamburg 78","供应商","SUP-001","渊博","运营部","UNA","UNA","装卸","P0","P0","按小时",11.0,11.0,0,0,"供应商报税","","","","","","","越,德",None,"劳务合同","纯派遣","2025-09-01","2026-08-31","阮文勇","+49-176-9003","WP-VN-003","2026-09-01",20,30,"在职","2025-09-01",None,"1003","YB-003",0),
+        ("YB-004","阮氏花","+49-176-0004",None,"VN","女","1995-07-22","签证","E12345004","Hamburg 90","供应商","SUP-001","渊博","运营部","UNA","UNA","库内","P0","P0","按件",11.0,11.0,0,0,"供应商报税","","","","","","","越",None,"劳务合同","纯派遣","2025-10-15","2026-10-14","阮文明","+49-176-9004","WP-VN-004","2026-10-15",20,30,"在职","2025-10-15",None,"1004","YB-004",0),
+        ("YB-005","陈大明","+49-176-0005",None,"CN","男","1985-01-30","护照","E12345005","Berlin 56","供应商","SUP-002","渊博","运营部","DHL","DHL,CMA","装卸","P3","P3","按柜",13.5,13.5,0,0,"我方报税","T005","34567890123","3","SS-005","DE55556666777788889999","AOK","中,德,英","叉车证","劳动合同","区块承包","2024-06-01","2026-12-31","陈小芳","+49-176-9005",None,None,20,30,"在职","2024-06-01",None,"1005","YB-005",0),
+        ("YB-006","刘芳","+49-176-0006",None,"CN","女","1993-09-08","护照","E12345006","Frankfurt 34","自有",None,"579","运营部","W579","W579","库内","P2","P2","按小时",12.5,12.0,0,0,"我方报税","T006","45678901234","1","SS-006","DE66667777888899990000","AOK","中","健康证","劳动合同","流程承包","2025-08-01","2027-07-31","刘强","+49-176-9006",None,None,20,30,"在职","2025-08-01",None,"1006","YB-006",0),
+        ("YB-007","黄强","+49-176-0007",None,"CN","男","1991-12-05","护照","E12345007","Frankfurt 67","供应商","SUP-003","579","运营部","W579","W579","装卸","P0","P0","按小时",11.0,12.0,0,0,"供应商报税","","","","","","","中",None,"劳务合同","流程承包","2026-01-10","2026-12-31","黄明","+49-176-9007",None,None,20,30,"在职","2026-01-10",None,"1007","YB-007",0),
+        ("YB-008","Maria K.","+49-176-0008",None,"DE","女","1994-04-18","身份证","DE-ID-008","Düsseldorf 22","自有",None,"渊博","运营部","DHL","DHL","库内","P2","P2","按小时",12.5,14.0,0,0,"我方报税","T008","56789012345","1","SS-008","DE89370400440532013007","TK","德,英",None,"劳动合同","纯派遣","2025-04-01","2027-03-31","Hans K.","+49-176-9008",None,None,20,30,"在职","2025-04-01",None,"1008","YB-008",0),
+        ("YB-009","赵六","+49-176-0009",None,"CN","男","1987-08-25","护照","E12345009","Essen 15","供应商","SUP-001","渊博","运营部","CMA","CMA,EMR","装卸","P0","P0","按小时",11.0,12.5,0,0,"供应商报税","","","","","","","中,德","叉车证","劳务合同","区块承包","2025-11-01","2026-10-31","赵强","+49-176-9009",None,None,20,30,"在职","2025-11-01",None,"1009","YB-009",0),
+        ("YB-010","武志强","+49-176-0010",None,"CN","男","1990-02-14","护照","E12345010","Emmerich 8","自有",None,"渊博","运营部","EMR","EMR,CMA","装卸","P4","P4","按小时",15.0,15.0,0,0,"我方报税","T010","67890123456","1","SS-010","DE89370400440532013009","AOK","中,德,英","叉车证","劳动合同","纯派遣","2024-01-15","2026-12-31","武芳芳","+49-176-9010",None,None,20,30,"在职","2024-01-15",None,"1010","YB-010",0),
+        ("YB-011","赵慧","+49-176-0020",None,"CN","女","1990-06-15","护照","E12345020","Köln 88","自有",None,"渊博","人事部","UNA","","HR专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T020","88901234567","1","SS-020","DE11112222333344445555","AOK","中,德,英","","劳动合同",None,"2024-03-01","2027-02-28","赵明","+49-176-9020",None,None,20,30,"在职","2024-03-01",None,"2001","YB-011",0),
+        ("YB-012","孙琳","+49-176-0021",None,"CN","女","1988-03-20","护照","E12345021","Köln 99","自有",None,"渊博","财务部","UNA","","财务专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T021","99012345678","1","SS-021","DE22223333444455556666","TK","中,德","","劳动合同",None,"2024-05-01","2027-04-30","孙明","+49-176-9021",None,None,20,30,"在职","2024-05-01",None,"2002","YB-012",0),
     ]
     for e in emps:
-        c.execute("INSERT INTO employees(id,name,phone,email,nationality,gender,birth_date,id_type,id_number,address,source,supplier_id,biz_line,department,primary_wh,dispatch_whs,position,grade,wage_level,settle_method,base_salary,hourly_rate,perf_bonus,extra_bonus,tax_mode,tax_no,tax_id,tax_class,ssn,iban,health_insurance,languages,special_skills,annual_leave_days,sick_leave_days,status,join_date,leave_date,pin,file_folder,has_account) VALUES("+",".join(["?"]*41)+")", e)
+        c.execute("INSERT INTO employees(id,name,phone,email,nationality,gender,birth_date,id_type,id_number,address,source,supplier_id,biz_line,department,primary_wh,dispatch_whs,position,grade,wage_level,settle_method,base_salary,hourly_rate,perf_bonus,extra_bonus,tax_mode,tax_no,tax_id,tax_class,ssn,iban,health_insurance,languages,special_skills,contract_type,dispatch_type,contract_start,contract_end,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,annual_leave_days,sick_leave_days,status,join_date,leave_date,pin,file_folder,has_account) VALUES("+",".join(["?"]*len(e))+")", e)
 
     # ── Leave Balances ──
     for e in emps:

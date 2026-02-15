@@ -153,6 +153,15 @@ CREATE TABLE IF NOT EXISTS employees (
     marital_status TEXT,           -- 婚姻状况
     children_count INTEGER DEFAULT 0, -- 子女数量
     secondary_job INTEGER DEFAULT 0,  -- 是否有副业 (0 无, 1 有)
+    -- 花名册增强: 合同与派遣信息
+    contract_type TEXT DEFAULT '劳动合同',  -- 合同类型 (劳动合同/劳务合同/兼职合同)
+    dispatch_type TEXT,                      -- 派遣类型 (纯派遣/流程承包/区块承包/整仓承包)
+    contract_start TEXT,                     -- 合同开始日期
+    contract_end TEXT,                       -- 合同结束日期
+    emergency_contact TEXT,                  -- 紧急联系人
+    emergency_phone TEXT,                    -- 紧急联系人电话
+    work_permit_no TEXT,                     -- 工作许可证号
+    work_permit_expiry TEXT,                 -- 工作许可证到期日
     annual_leave_days REAL DEFAULT 20, sick_leave_days REAL DEFAULT 30,
     status TEXT DEFAULT '在职', join_date TEXT, leave_date TEXT, pin TEXT,
     file_folder TEXT, has_account INTEGER DEFAULT 0,
@@ -165,10 +174,17 @@ CREATE TABLE IF NOT EXISTS suppliers (
     settle_cycle TEXT DEFAULT '月结', currency TEXT DEFAULT 'EUR',
     contact_name TEXT, contact_phone TEXT, contact_email TEXT, address TEXT,
     tax_handle TEXT DEFAULT '供应商自行报税',
+    -- 供应商模块增强
+    service_scope TEXT,                      -- 服务范围
+    dispatch_types TEXT,                     -- 可提供派遣类型 (JSON: ["纯派遣","流程承包"...])
+    bank_name TEXT,                          -- 开户银行
+    bank_account TEXT,                       -- 银行账号
+    max_headcount INTEGER DEFAULT 0,         -- 最大供应人数
+    current_headcount INTEGER DEFAULT 0,     -- 当前在岗人数
     status TEXT DEFAULT '合作中', rating TEXT DEFAULT 'B', notes TEXT,
     created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
 
--- ── Warehouses ──
+-- ── Warehouses (客户仓库 - 第三方劳务派遣) ──
 CREATE TABLE IF NOT EXISTS warehouses (
     code TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT,
     manager TEXT, phone TEXT, client_name TEXT, project_no TEXT,
@@ -177,8 +193,15 @@ CREATE TABLE IF NOT EXISTS warehouses (
     unload_20gp REAL DEFAULT 150, unload_40gp REAL DEFAULT 280, unload_45hc REAL DEFAULT 330,
     emp_cols TEXT, ts_cols TEXT, export_freq TEXT DEFAULT 'Monthly', export_lang TEXT DEFAULT 'zh',
     created_at TEXT DEFAULT (datetime('now')),
-    tax_number TEXT, contact_person TEXT, cooperation_mode TEXT DEFAULT '自营',
-    contact_email TEXT, contact_phone_2 TEXT, updated_at TEXT DEFAULT (datetime('now')));
+    tax_number TEXT, contact_person TEXT, cooperation_mode TEXT DEFAULT '第三方派遣',
+    contact_email TEXT, contact_phone_2 TEXT,
+    -- 仓库管理增强: 派遣服务类型
+    service_type TEXT DEFAULT '纯派遣',      -- 服务类型 (纯派遣/流程承包/区块承包/整仓承包)
+    contract_start_date TEXT,                -- 服务合同开始日期
+    contract_end_date TEXT,                  -- 服务合同结束日期
+    headcount_quota INTEGER DEFAULT 0,       -- 合同约定人数
+    current_headcount INTEGER DEFAULT 0,     -- 当前派遣人数
+    updated_at TEXT DEFAULT (datetime('now')));
 
 -- ── NEW: Warehouse Salary Config - 仓库薪资配置表 ──
 CREATE TABLE IF NOT EXISTS warehouse_salary_config (
@@ -287,7 +310,9 @@ CREATE TABLE IF NOT EXISTS permission_overrides (
     can_view INTEGER DEFAULT 0, can_create INTEGER DEFAULT 0,
     can_edit INTEGER DEFAULT 0, can_delete INTEGER DEFAULT 0,
     can_export INTEGER DEFAULT 0, can_approve INTEGER DEFAULT 0,
+    can_import INTEGER DEFAULT 0,
     hidden_fields TEXT DEFAULT '',
+    editable_fields TEXT DEFAULT '',
     updated_by TEXT, updated_at TEXT DEFAULT (datetime('now')),
     UNIQUE(role, module));
 

@@ -349,6 +349,71 @@ async def update_employee(eid: str, request: Request, user=Depends(get_user)):
     audit_log(user.get("username", ""), "update", "employees", eid, json.dumps(list(data.keys())))
     return {"ok": True}
 
+# ── Employee Roster (花名册) ──
+@app.get("/api/roster")
+def get_roster(
+    status: Optional[str] = None,
+    dispatch_type: Optional[str] = None,
+    warehouse_code: Optional[str] = None,
+    source: Optional[str] = None,
+    user=Depends(get_user)
+):
+    """花名册接口 - 获取员工花名册列表，支持按状态、派遣类型、仓库、来源筛选"""
+    conditions = []
+    params = []
+    if status:
+        conditions.append("e.status=?")
+        params.append(status)
+    if dispatch_type:
+        conditions.append("e.dispatch_type=?")
+        params.append(dispatch_type)
+    if warehouse_code:
+        conditions.append("(e.primary_wh=? OR e.dispatch_whs LIKE ?)")
+        params.extend([warehouse_code, f"%{warehouse_code}%"])
+    if source:
+        conditions.append("e.source=?")
+        params.append(source)
+    where = " AND ".join(conditions) if conditions else "1=1"
+
+    db = database.get_db()
+    rows = db.execute(f"""
+        SELECT e.*, s.name as supplier_name, w.name as warehouse_name, w.service_type
+        FROM employees e
+        LEFT JOIN suppliers s ON s.id = e.supplier_id
+        LEFT JOIN warehouses w ON w.code = e.primary_wh
+        WHERE {where}
+        ORDER BY e.id ASC
+    """, tuple(params)).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.get("/api/roster/stats")
+def get_roster_stats(user=Depends(get_user)):
+    """花名册统计 - 按派遣类型、合同类型、来源等统计"""
+    db = database.get_db()
+    stats = {
+        "by_dispatch_type": [dict(r) for r in db.execute(
+            "SELECT dispatch_type, COUNT(*) as count FROM employees WHERE status='在职' AND dispatch_type IS NOT NULL GROUP BY dispatch_type"
+        ).fetchall()],
+        "by_contract_type": [dict(r) for r in db.execute(
+            "SELECT contract_type, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY contract_type"
+        ).fetchall()],
+        "by_source": [dict(r) for r in db.execute(
+            "SELECT source, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY source"
+        ).fetchall()],
+        "by_nationality": [dict(r) for r in db.execute(
+            "SELECT nationality, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY nationality"
+        ).fetchall()],
+        "contract_expiring_soon": [dict(r) for r in db.execute(
+            "SELECT id, name, contract_end, primary_wh FROM employees WHERE status='在职' AND contract_end IS NOT NULL AND contract_end <= date('now', '+90 days') ORDER BY contract_end ASC"
+        ).fetchall()],
+        "work_permit_expiring_soon": [dict(r) for r in db.execute(
+            "SELECT id, name, work_permit_expiry, nationality FROM employees WHERE status='在职' AND work_permit_expiry IS NOT NULL AND work_permit_expiry <= date('now', '+90 days') ORDER BY work_permit_expiry ASC"
+        ).fetchall()],
+    }
+    db.close()
+    return stats
+
 # ── Account Management ──
 @app.get("/api/accounts")
 def get_accounts(user=Depends(get_user)):
@@ -441,7 +506,7 @@ async def batch_generate_accounts(request: Request, user=Depends(get_user)):
 @app.post("/api/accounts/reset-password")
 async def reset_password(request: Request, user=Depends(get_user)):
     """重置密码"""
-    if user.get("role") not in ["admin", "hr", "mgr"]:
+    if user.get("role") not in ["admin", "hr", "mgr", "ceo"]:
         raise HTTPException(403, "无权限执行密码重置")
 
     data = await request.json()
@@ -655,6 +720,27 @@ async def create_supplier(request: Request, user=Depends(get_user)):
         raise HTTPException(500, f"创建供应商失败: {str(e)}")
     audit_log(user.get("username", ""), "create", "suppliers", data["id"], f"创建供应商: {data.get('name','')}")
     return {"ok": True, "id": data["id"]}
+
+@app.put("/api/suppliers/{sid}")
+async def update_supplier(sid: str, request: Request, user=Depends(get_user)):
+    """更新供应商信息"""
+    data = await request.json()
+    data.pop("id", None)
+    data["updated_at"] = datetime.now().isoformat()
+    try:
+        update("suppliers", "id", sid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新供应商失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "suppliers", sid, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+@app.get("/api/suppliers/{sid}")
+def get_supplier(sid: str, user=Depends(get_user)):
+    """获取单个供应商详情"""
+    sups = q("suppliers", "id=?", (sid,))
+    if not sups:
+        raise HTTPException(404, "供应商不存在")
+    return sups[0]
 
 # ── Warehouses ──
 @app.get("/api/warehouses")
@@ -1161,23 +1247,383 @@ def dashboard(user=Depends(get_user)):
         "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE work_date LIKE ?", (f"{current_year_month}%",)).fetchone()[0],
         "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' GROUP BY grade ORDER BY grade").fetchall()],
         "wh_dist": [dict(r) for r in db.execute("SELECT primary_wh w,COUNT(*) c FROM employees WHERE status='在职' GROUP BY primary_wh").fetchall()],
+        "service_type_dist": [dict(r) for r in db.execute("SELECT service_type, COUNT(*) c FROM warehouses WHERE service_type IS NOT NULL GROUP BY service_type").fetchall()],
+        "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND dispatch_type IS NOT NULL GROUP BY dispatch_type").fetchall()],
     }
     db.close(); return r
 
 # ── Permissions ──
+# Role hierarchy: admin (god view) > ceo > mgr > hr > fin > wh > sup > worker
+ROLE_HIERARCHY = {
+    "admin": 100,  # God view - highest permission level
+    "ceo": 90,     # CEO level - 王博 and 袁梁毅
+    "mgr": 70,     # Manager
+    "hr": 60,      # HR
+    "fin": 50,     # Finance
+    "wh": 40,      # Warehouse
+    "sup": 30,     # Supplier
+    "worker": 10,  # Worker
+}
+
+def _get_role_level(role: str) -> int:
+    """Get numeric role level for hierarchy comparison"""
+    return ROLE_HIERARCHY.get(role, 0)
+
 @app.get("/api/permissions")
 def get_perms(user=Depends(get_user)): return q("permission_overrides", order="role ASC, module ASC")
+
+@app.get("/api/permissions/check")
+def check_permissions(module: str, user=Depends(get_user)):
+    """Check current user's permissions for a specific module.
+    Admin has god view (all permissions). CEO has near-full access."""
+    role = user.get("role", "worker")
+    # Admin always has full access (god view)
+    if role == "admin":
+        return {
+            "role": "admin", "module": module, "role_level": 100,
+            "can_view": 1, "can_create": 1, "can_edit": 1, "can_delete": 1,
+            "can_export": 1, "can_approve": 1, "can_import": 1,
+            "hidden_fields": "", "editable_fields": ""
+        }
+    db = database.get_db()
+    perm = db.execute("SELECT * FROM permission_overrides WHERE role=? AND module=?", (role, module)).fetchone()
+    db.close()
+    if not perm:
+        return {"role": role, "module": module, "role_level": _get_role_level(role),
+                "can_view": 0, "can_create": 0, "can_edit": 0, "can_delete": 0,
+                "can_export": 0, "can_approve": 0, "can_import": 0,
+                "hidden_fields": "", "editable_fields": ""}
+    result = dict(perm)
+    result["role_level"] = _get_role_level(role)
+    return result
+
+@app.get("/api/permissions/my")
+def get_my_permissions(user=Depends(get_user)):
+    """Get all permissions for the current user's role"""
+    role = user.get("role", "worker")
+    role_level = _get_role_level(role)
+    if role == "admin":
+        # Admin: god view, return all modules with full access
+        db = database.get_db()
+        modules = db.execute("SELECT DISTINCT module FROM permission_overrides").fetchall()
+        db.close()
+        return {
+            "role": "admin", "role_level": 100, "is_admin": True, "is_ceo": False,
+            "permissions": {m["module"]: {
+                "can_view": 1, "can_create": 1, "can_edit": 1, "can_delete": 1,
+                "can_export": 1, "can_approve": 1, "can_import": 1,
+                "hidden_fields": "", "editable_fields": ""
+            } for m in modules}
+        }
+    db = database.get_db()
+    perms = db.execute("SELECT * FROM permission_overrides WHERE role=?", (role,)).fetchall()
+    db.close()
+    return {
+        "role": role, "role_level": role_level,
+        "is_admin": role == "admin", "is_ceo": role == "ceo",
+        "permissions": {p["module"]: dict(p) for p in perms}
+    }
 
 @app.post("/api/permissions/update")
 async def update_perm(request: Request, user=Depends(get_user)):
     d = await request.json()
     if not d.get("role") or not d.get("module"):
         raise HTTPException(400, "角色和模块不能为空")
+    # Only admin can update permissions
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可修改权限设置")
     db = database.get_db()
-    db.execute("UPDATE permission_overrides SET can_view=?,can_create=?,can_edit=?,can_delete=?,can_export=?,can_approve=? WHERE role=? AND module=?",
-        (d.get("can_view",0),d.get("can_create",0),d.get("can_edit",0),d.get("can_delete",0),d.get("can_export",0),d.get("can_approve",0),d["role"],d["module"]))
+    db.execute("""UPDATE permission_overrides SET can_view=?,can_create=?,can_edit=?,can_delete=?,
+        can_export=?,can_approve=?,can_import=?,hidden_fields=?,editable_fields=? WHERE role=? AND module=?""",
+        (d.get("can_view",0),d.get("can_create",0),d.get("can_edit",0),d.get("can_delete",0),
+         d.get("can_export",0),d.get("can_approve",0),d.get("can_import",0),
+         d.get("hidden_fields",""),d.get("editable_fields",""),d["role"],d["module"]))
     db.commit(); db.close()
     audit_log(user.get("username", ""), "update", "permission_overrides", f"{d['role']}/{d['module']}", json.dumps(d))
+    return {"ok": True}
+
+@app.get("/api/roles")
+def get_roles(user=Depends(get_user)):
+    """Get all available roles with hierarchy levels"""
+    return [
+        {"role": "admin", "label": "系统管理员", "level": 100, "description": "上帝视角 - 最高权限"},
+        {"role": "ceo", "label": "CEO", "level": 90, "description": "公司最高管理层 (王博/袁梁毅)"},
+        {"role": "mgr", "label": "经理", "level": 70, "description": "部门/区域经理"},
+        {"role": "hr", "label": "人事", "level": 60, "description": "人力资源管理"},
+        {"role": "fin", "label": "财务", "level": 50, "description": "财务管理"},
+        {"role": "wh", "label": "仓库", "level": 40, "description": "仓库管理"},
+        {"role": "sup", "label": "供应商", "level": 30, "description": "供应商账号"},
+        {"role": "worker", "label": "员工", "level": 10, "description": "一线工人"},
+    ]
+
+# ── Batch Import / Export ──
+
+def _check_permission(user, module: str, action: str):
+    """Check user permission for a specific action. Admin always passes."""
+    role = user.get("role", "worker")
+    if role == "admin":
+        return True
+    db = database.get_db()
+    perm = db.execute("SELECT * FROM permission_overrides WHERE role=? AND module=?", (role, module)).fetchone()
+    db.close()
+    if not perm:
+        return False
+    perm_dict = dict(perm)
+    return bool(perm_dict.get(action, 0))
+
+# Field definitions for each exportable table (column order for import/export)
+TABLE_EXPORT_FIELDS = {
+    "employees": ["id","name","phone","email","nationality","gender","birth_date","id_type","id_number",
+                   "address","source","supplier_id","biz_line","department","primary_wh","dispatch_whs",
+                   "position","grade","wage_level","settle_method","base_salary","hourly_rate",
+                   "contract_type","dispatch_type","contract_start","contract_end",
+                   "emergency_contact","emergency_phone","work_permit_no","work_permit_expiry",
+                   "status","join_date","leave_date"],
+    "suppliers": ["id","name","type","biz_line","contract_no","contract_start","contract_end",
+                   "settle_cycle","currency","contact_name","contact_phone","contact_email","address",
+                   "tax_handle","service_scope","dispatch_types","bank_name","bank_account",
+                   "max_headcount","current_headcount","status","rating","notes"],
+    "timesheet": ["id","employee_id","employee_name","source","supplier_id","biz_line",
+                   "work_date","warehouse_code","start_time","end_time","hours","position","grade",
+                   "settle_method","base_rate","hourly_pay","piece_pay","perf_bonus","other_fee",
+                   "ssi_deduct","tax_deduct","net_pay","container_no","container_type",
+                   "wh_status","notes"],
+    "warehouses": ["code","name","address","manager","phone","client_name","project_no",
+                    "biz_line","client_settle","service_type","cooperation_mode",
+                    "contract_start_date","contract_end_date","headcount_quota","current_headcount",
+                    "tax_number","contact_person","contact_email"],
+    "leave_requests": ["id","employee_id","employee_name","grade","warehouse_code",
+                        "leave_type","start_date","end_date","days","reason","status"],
+    "expense_claims": ["id","employee_id","employee_name","grade","department",
+                        "claim_type","amount","currency","claim_date","description","status"],
+    "performance_reviews": ["id","employee_id","employee_name","grade","review_period",
+                             "review_type","total_score","rating","reviewer","status"],
+}
+
+@app.get("/api/export/{table}")
+def export_table(table: str, user=Depends(get_user)):
+    """Export table data as JSON. Respects role-based field visibility."""
+    if table not in TABLE_EXPORT_FIELDS:
+        raise HTTPException(400, f"不支持导出的表: {table}")
+    module_map = {"employees": "employees", "suppliers": "suppliers", "timesheet": "timesheet",
+                  "warehouses": "warehouse", "leave_requests": "leave", "expense_claims": "expense",
+                  "performance_reviews": "performance"}
+    module = module_map.get(table, table)
+    if not _check_permission(user, module, "can_export"):
+        raise HTTPException(403, "无导出权限")
+    fields = TABLE_EXPORT_FIELDS[table]
+    role = user.get("role", "worker")
+    # Apply hidden_fields filter (admin sees all)
+    if role != "admin":
+        db = database.get_db()
+        perm = db.execute("SELECT hidden_fields FROM permission_overrides WHERE role=? AND module=?",
+                          (role, module)).fetchone()
+        db.close()
+        if perm and perm["hidden_fields"]:
+            hidden = [f.strip() for f in perm["hidden_fields"].split(",") if f.strip()]
+            fields = [f for f in fields if f not in hidden]
+    # Query data
+    rows = q(table)
+    # Filter to only export fields
+    export_data = []
+    for row in rows:
+        export_data.append({f: row.get(f) for f in fields if f in row})
+    return {"table": table, "fields": fields, "count": len(export_data), "data": export_data}
+
+@app.post("/api/import/{table}")
+async def import_table(table: str, request: Request, user=Depends(get_user)):
+    """Batch import records into a table from JSON array.
+    Request body: {"data": [{...}, {...}, ...]}"""
+    if table not in TABLE_EXPORT_FIELDS:
+        raise HTTPException(400, f"不支持导入的表: {table}")
+    module_map = {"employees": "employees", "suppliers": "suppliers", "timesheet": "timesheet",
+                  "warehouses": "warehouse", "leave_requests": "leave", "expense_claims": "expense",
+                  "performance_reviews": "performance"}
+    module = module_map.get(table, table)
+    if not _check_permission(user, module, "can_import"):
+        raise HTTPException(403, "无导入权限")
+
+    body = await request.json()
+    records = body.get("data", [])
+    if not records or not isinstance(records, list):
+        raise HTTPException(400, "导入数据不能为空，需要 {\"data\": [...]}")
+
+    id_col = "code" if table == "warehouses" else "id"
+    success = 0
+    errors = []
+    db = database.get_db()
+    try:
+        for i, record in enumerate(records):
+            try:
+                # Auto-generate ID if missing
+                if id_col not in record or not record[id_col]:
+                    if table == "employees":
+                        record["id"] = f"YB-{uuid.uuid4().hex[:6].upper()}"
+                    elif table == "suppliers":
+                        record["id"] = f"SUP-{uuid.uuid4().hex[:4].upper()}"
+                    elif table == "timesheet":
+                        record["id"] = f"WT-{uuid.uuid4().hex[:8]}"
+                    elif table == "leave_requests":
+                        record["id"] = f"LR-{uuid.uuid4().hex[:6]}"
+                    elif table == "expense_claims":
+                        record["id"] = f"EC-{uuid.uuid4().hex[:6]}"
+                    elif table == "performance_reviews":
+                        record["id"] = f"PR-{uuid.uuid4().hex[:6]}"
+                now = datetime.now().isoformat()
+                record.setdefault("created_at", now)
+                record.setdefault("updated_at", now)
+
+                # Validate required fields
+                if table == "employees" and not record.get("name"):
+                    errors.append({"row": i, "error": "员工姓名不能为空"})
+                    continue
+                if table == "suppliers" and not record.get("name"):
+                    errors.append({"row": i, "error": "供应商名称不能为空"})
+                    continue
+
+                # Check for existing record (upsert logic)
+                existing = db.execute(f"SELECT {id_col} FROM {table} WHERE {id_col}=?",
+                                      (record[id_col],)).fetchone()
+                if existing:
+                    # Update existing
+                    update_data = {k: v for k, v in record.items() if k != id_col}
+                    update_data["updated_at"] = now
+                    sets = ",".join(f"{k}=?" for k in update_data.keys())
+                    db.execute(f"UPDATE {table} SET {sets} WHERE {id_col}=?",
+                               list(update_data.values()) + [record[id_col]])
+                else:
+                    # Insert new
+                    cols = ",".join(record.keys())
+                    phs = ",".join(["?"] * len(record))
+                    db.execute(f"INSERT INTO {table}({cols}) VALUES({phs})", list(record.values()))
+                success += 1
+            except Exception as e:
+                errors.append({"row": i, "error": str(e)})
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"导入失败: {str(e)}")
+    finally:
+        db.close()
+    audit_log(user.get("username", ""), "import", table, f"batch_{success}",
+              f"导入{success}条, 失败{len(errors)}条")
+    return {"ok": True, "success": success, "errors": errors, "total": len(records)}
+
+# ── Update/Delete endpoints for remaining tables ──
+
+@app.put("/api/timesheet/{tid}")
+async def update_timesheet(tid: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    data["updated_at"] = datetime.now().isoformat()
+    try:
+        update("timesheet", "id", tid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新工时记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "timesheet", tid, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+@app.post("/api/talent")
+async def create_talent(request: Request, user=Depends(get_user)):
+    data = await request.json()
+    if not data.get("name"):
+        raise HTTPException(400, "人才姓名不能为空")
+    data["id"] = f"TP-{uuid.uuid4().hex[:6]}"
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("talent_pool", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建人才记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "talent_pool", data["id"], f"人才: {data.get('name','')}")
+    return {"ok": True, "id": data["id"]}
+
+@app.put("/api/talent/{tid}")
+async def update_talent(tid: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    try:
+        update("talent_pool", "id", tid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新人才记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "talent_pool", tid, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+@app.post("/api/dispatch")
+async def create_dispatch(request: Request, user=Depends(get_user)):
+    data = await request.json()
+    if not data.get("warehouse_code"):
+        raise HTTPException(400, "仓库编码不能为空")
+    data["id"] = f"DN-{uuid.uuid4().hex[:6]}"
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("dispatch_needs", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建派遣需求失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "dispatch_needs", data["id"], f"仓库: {data.get('warehouse_code','')}")
+    return {"ok": True, "id": data["id"]}
+
+@app.put("/api/dispatch/{did}")
+async def update_dispatch(did: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    try:
+        update("dispatch_needs", "id", did, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新派遣需求失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "dispatch_needs", did, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+@app.post("/api/schedules")
+async def create_schedule(request: Request, user=Depends(get_user)):
+    data = await request.json()
+    if not data.get("employee_id") or not data.get("work_date"):
+        raise HTTPException(400, "员工ID和工作日期不能为空")
+    data["id"] = f"SC-{uuid.uuid4().hex[:6]}"
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("schedules", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建排班记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "schedules", data["id"], f"员工: {data.get('employee_id','')}")
+    return {"ok": True, "id": data["id"]}
+
+@app.put("/api/schedules/{sid}")
+async def update_schedule(sid: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    try:
+        update("schedules", "id", sid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新排班记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "schedules", sid, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+@app.delete("/api/{table}/{record_id}")
+async def delete_record(table: str, record_id: str, user=Depends(get_user)):
+    """Soft delete for admin/ceo only. Sets status to '已删除' or removes record."""
+    if user.get("role") not in ["admin", "ceo"]:
+        raise HTTPException(403, "仅管理员或CEO可执行删除操作")
+    allowed_delete_tables = {"employees", "suppliers", "talent_pool", "dispatch_needs",
+                              "schedules", "leave_requests", "expense_claims"}
+    if table not in allowed_delete_tables:
+        raise HTTPException(400, f"不支持删除的表: {table}")
+    _validate_table_name(table)
+    db = database.get_db()
+    try:
+        id_col = "code" if table == "warehouses" else "id"
+        # Try soft-delete first (set status)
+        row = db.execute(f"SELECT * FROM {table} WHERE {id_col}=?", (record_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "记录不存在")
+        if "status" in dict(row):
+            db.execute(f"UPDATE {table} SET status='已删除' WHERE {id_col}=?", (record_id,))
+        else:
+            db.execute(f"DELETE FROM {table} WHERE {id_col}=?", (record_id,))
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"删除失败: {str(e)}")
+    finally:
+        db.close()
+    audit_log(user.get("username", ""), "delete", table, record_id, f"由{user.get('display_name', user.get('username',''))}删除")
     return {"ok": True}
 
 # ── File Upload ──
