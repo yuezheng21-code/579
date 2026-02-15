@@ -8,11 +8,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import database
+import re
 
 database.init_db(); database.seed_data(); database.ensure_demo_users()
 
 app = FastAPI(title="渊博579 HR V6")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# CORS: Restrict to specific origins in production. Use "*" only for development.
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=ALLOWED_ORIGINS, 
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"]
+)
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -27,7 +36,12 @@ def hash_password(password):
 def verify_password(password, hashed):
     return hash_password(password) == hashed
 
-SECRET_KEY = os.environ.get("HR_TOKEN_SECRET", "yb579-dev-secret")
+SECRET_KEY = os.environ.get("HR_TOKEN_SECRET")
+if not SECRET_KEY:
+    # In production, this should raise an error. For development, use a dev key.
+    if os.environ.get("ENV") == "production":
+        raise ValueError("HR_TOKEN_SECRET environment variable must be set in production")
+    SECRET_KEY = "yb579-dev-secret"
 TOKEN_TTL_SECONDS = int(os.environ.get("HR_TOKEN_TTL", 60 * 60 * 24 * 7))
 
 def _b64url_encode(data: bytes) -> str:
@@ -66,6 +80,14 @@ def generate_password(length=8):
     chars = string.ascii_letters + string.digits
     return ''.join(secrets.choice(chars) for _ in range(length))
 
+def get_current_year():
+    """获取当前年份"""
+    return datetime.now().year
+
+def get_current_year_month():
+    """获取当前年月，格式: YYYY-MM"""
+    return datetime.now().strftime("%Y-%m")
+
 def get_user(request: Request):
     token = request.headers.get("Authorization","").replace("Bearer ","")
     if not token:
@@ -75,41 +97,149 @@ def get_user(request: Request):
     if not username:
         raise HTTPException(401, "Unauthorized")
     db = database.get_db()
-    u = db.execute("SELECT * FROM users WHERE username=? AND active=1", (username,)).fetchone()
-    if u:
+    try:
+        u = db.execute("SELECT * FROM users WHERE username=? AND active=1", (username,)).fetchone()
+        if u:
+            return dict(u)
+        if payload.get("pin"):
+            emp = db.execute("SELECT id,name,primary_wh FROM employees WHERE id=?", (username,)).fetchone()
+            if emp:
+                return {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"], "warehouse_code": emp["primary_wh"]}
+        raise HTTPException(401, "Unauthorized")
+    finally:
         db.close()
-        return dict(u)
-    if payload.get("pin"):
-        emp = db.execute("SELECT id,name,primary_wh FROM employees WHERE id=?", (username,)).fetchone()
-        db.close()
-        if emp:
-            return {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"], "warehouse_code": emp["primary_wh"]}
-    db.close()
-    raise HTTPException(401, "Unauthorized")
+
+# Whitelist of allowed table names to prevent SQL injection
+ALLOWED_TABLES = {
+    "employees", "users", "timesheet", "leave_requests", "expense_claims",
+    "performance_reviews", "warehouses", "suppliers", "business_lines",
+    "employee_grades", "warehouse_salary_config", "leave_balances",
+    "dispatch_needs", "container_tasks", "audit_logs"
+}
+
+# Table-specific allowed order columns for validation
+TABLE_ORDER_COLUMNS = {
+    "employees": ["rowid", "id", "created_at", "updated_at", "name", "grade", "status"],
+    "users": ["rowid", "id", "created_at", "username"],
+    "timesheet": ["rowid", "id", "created_at", "updated_at", "work_date", "employee_id"],
+    "leave_requests": ["rowid", "id", "created_at", "start_date", "end_date"],
+    "expense_claims": ["rowid", "id", "created_at", "status"],
+    "performance_reviews": ["rowid", "id", "created_at"],
+    "warehouses": ["rowid", "id", "code", "name"],
+    "suppliers": ["rowid", "id", "name"],
+    "business_lines": ["rowid", "id", "name"],
+    "employee_grades": ["rowid", "id", "grade"],
+    "warehouse_salary_config": ["rowid", "id", "created_at", "updated_at", "warehouse_code", "grade"],
+    "leave_balances": ["rowid", "id", "employee_id"],
+    "dispatch_needs": ["rowid", "id", "created_at"],
+    "container_tasks": ["rowid", "id", "created_at"],
+    "audit_logs": ["rowid", "id", "timestamp"],
+}
+
+def _validate_table_name(table: str):
+    """Validate table name to prevent SQL injection"""
+    if table not in ALLOWED_TABLES:
+        raise HTTPException(400, f"Invalid table name: {table}")
+    return table
+
+def _validate_order_clause(order: str, table: str):
+    """Validate ORDER BY clause to prevent SQL injection"""
+    # Allow simple column names with optional DESC/ASC
+    pattern = r'^(\w+)(\s+(DESC|ASC))?$'
+    match = re.match(pattern, order, re.IGNORECASE)
+    if not match:
+        raise HTTPException(400, f"Invalid order clause: {order}")
+    
+    column = match.group(1)
+    # Check if column is allowed for this specific table
+    allowed_cols = TABLE_ORDER_COLUMNS.get(table, ["rowid", "id"])
+    if column not in allowed_cols:
+        raise HTTPException(400, f"Invalid order column '{column}' for table '{table}'")
+    
+    return order
 
 def q(table, where="1=1", params=(), order="rowid DESC", limit=500):
+    _validate_table_name(table)
+    _validate_order_clause(order, table)
+    
+    # Ensure limit is an integer
+    try:
+        limit = int(limit)
+        if limit <= 0 or limit > 1000:
+            limit = 500
+    except (ValueError, TypeError):
+        limit = 500
+    
     db = database.get_db()
-    rows = db.execute(f"SELECT * FROM {table} WHERE {where} ORDER BY {order} LIMIT {limit}", params).fetchall()
-    db.close()
-    return [dict(r) for r in rows]
+    try:
+        rows = db.execute(f"SELECT * FROM {table} WHERE {where} ORDER BY {order} LIMIT {limit}", params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        db.close()
 
 def insert(table, data: dict):
+    _validate_table_name(table)
     db = database.get_db()
-    cols = ",".join(data.keys()); phs = ",".join(["?"]*len(data))
-    db.execute(f"INSERT INTO {table}({cols}) VALUES({phs})", list(data.values()))
-    db.commit(); db.close()
+    try:
+        cols = ",".join(data.keys())
+        phs = ",".join(["?"]*len(data))
+        db.execute(f"INSERT INTO {table}({cols}) VALUES({phs})", list(data.values()))
+        db.commit()
+    finally:
+        db.close()
 
 def update(table, id_col, id_val, data: dict):
+    _validate_table_name(table)
     db = database.get_db()
-    sets = ",".join(f"{k}=?" for k in data.keys())
-    db.execute(f"UPDATE {table} SET {sets} WHERE {id_col}=?", list(data.values())+[id_val])
-    db.commit(); db.close()
+    try:
+        sets = ",".join(f"{k}=?" for k in data.keys())
+        db.execute(f"UPDATE {table} SET {sets} WHERE {id_col}=?", list(data.values())+[id_val])
+        db.commit()
+    finally:
+        db.close()
+
+def audit_log(username: str, action: str, resource_type: str, resource_id: str, details: str = ""):
+    """记录审计日志"""
+    try:
+        db = database.get_db()
+        # Use the actual schema of audit_logs table
+        db.execute("""
+            INSERT INTO audit_logs (username, action, target_table, target_id, new_value)
+            VALUES (?, ?, ?, ?, ?)
+        """, (username, action, resource_type, resource_id, details))
+        db.commit()
+        db.close()
+    except Exception as e:
+        # Log the failure but don't fail the operation
+        import sys
+        print(f"AUDIT LOG FAILURE: {username} {action} {resource_type}/{resource_id} - Error: {e}", file=sys.stderr)
 
 # ── Auth ──
 class LoginReq(BaseModel):
-    username: str; password: str
+    username: str
+    password: str
+
 class PinReq(BaseModel):
     pin: str
+
+class AccountGenerateReq(BaseModel):
+    employee_id: str
+    role: str = "worker"
+
+class BatchAccountGenerateReq(BaseModel):
+    employee_ids: list[str]
+    role: str = "worker"
+
+class PasswordResetReq(BaseModel):
+    username: str
+
+class TimesheetCreateReq(BaseModel):
+    employee_id: str
+    work_date: str
+    warehouse_code: str
+    hours: float = 0
+    grade: Optional[str] = None
+    position: Optional[str] = "库内"
 
 @app.post("/api/login")
 def login(req: LoginReq):
@@ -212,28 +342,33 @@ async def batch_generate_accounts(request: Request, user=Depends(get_user)):
 
     results = []
     db = database.get_db()
+    
+    try:
+        for eid in employee_ids:
+            emp = db.execute("SELECT * FROM employees WHERE id=?", (eid,)).fetchone()
+            if not emp: continue
 
-    for eid in employee_ids:
-        emp = db.execute("SELECT * FROM employees WHERE id=?", (eid,)).fetchone()
-        if not emp: continue
+            existing = db.execute("SELECT * FROM users WHERE employee_id=?", (eid,)).fetchone()
+            if existing: continue
 
-        existing = db.execute("SELECT * FROM users WHERE employee_id=?", (eid,)).fetchone()
-        if existing: continue
+            username = eid.lower().replace("-", "")
+            password = generate_password(8)
+            password_hash = hash_password(password)
 
-        username = eid.lower().replace("-", "")
-        password = generate_password(8)
-        password_hash = hash_password(password)
+            db.execute("""INSERT INTO users(username, password_hash, display_name, role, employee_id, warehouse_code, biz_line)
+                          VALUES(?,?,?,?,?,?,?)""",
+                       (username, password_hash, emp["name"], role, eid, emp["primary_wh"], emp["biz_line"]))
+            db.execute("UPDATE employees SET has_account=1 WHERE id=?", (eid,))
 
-        db.execute("""INSERT INTO users(username, password_hash, display_name, role, employee_id, warehouse_code, biz_line)
-                      VALUES(?,?,?,?,?,?,?)""",
-                   (username, password_hash, emp["name"], role, eid, emp["primary_wh"], emp["biz_line"]))
-        db.execute("UPDATE employees SET has_account=1 WHERE id=?", (eid,))
+            results.append({"employee_id": eid, "username": username, "password": password, "name": emp["name"]})
 
-        results.append({"employee_id": eid, "username": username, "password": password, "name": emp["name"]})
-
-    db.commit()
-    db.close()
-    return {"ok": True, "accounts": results}
+        db.commit()
+        return {"ok": True, "accounts": results}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"批量生成账号失败: {str(e)}")
+    finally:
+        db.close()
 
 @app.post("/api/accounts/reset-password")
 async def reset_password(request: Request, user=Depends(get_user)):
@@ -256,6 +391,10 @@ async def reset_password(request: Request, user=Depends(get_user)):
     db.commit()
     db.close()
 
+    # Audit log
+    audit_log(user.get("username", ""), "reset_password", "user", username, 
+              f"密码由 {user.get('username')} 重置")
+
     return {"ok": True, "username": username, "password": new_password}
 
 @app.put("/api/accounts/{username}/toggle")
@@ -271,6 +410,12 @@ async def toggle_account(username: str, user=Depends(get_user)):
     db.execute("UPDATE users SET active=? WHERE username=?", (new_status, username))
     db.commit()
     db.close()
+    
+    # Audit log
+    action = "enable_account" if new_status else "disable_account"
+    audit_log(user.get("username", ""), action, "user", username,
+              f"账号{'启用' if new_status else '禁用'}由 {user.get('username')} 执行")
+    
     return {"ok": True, "active": new_status}
 
 # ── My Page (员工个人页面) ──
@@ -287,28 +432,31 @@ def get_mypage(user=Depends(get_user)):
         db.close()
         raise HTTPException(404, "员工信息不存在")
 
+    current_year = get_current_year()
+    current_year_month = get_current_year_month()
+
     # 获取工时统计
     ts_stats = db.execute("""
         SELECT warehouse_code, COUNT(*) as days, SUM(hours) as total_hours,
                SUM(hourly_pay) as total_pay, SUM(net_pay) as total_net
         FROM timesheet
-        WHERE employee_id=? AND work_date LIKE '2026-%'
+        WHERE employee_id=? AND work_date LIKE ?
         GROUP BY warehouse_code
-    """, (employee_id,)).fetchall()
+    """, (employee_id, f"{current_year}-%")).fetchall()
 
     # 获取本月工时
     monthly_stats = db.execute("""
         SELECT SUM(hours) as hours, SUM(hourly_pay) as pay, SUM(net_pay) as net
         FROM timesheet
-        WHERE employee_id=? AND work_date LIKE '2026-02%'
-    """, (employee_id,)).fetchone()
+        WHERE employee_id=? AND work_date LIKE ?
+    """, (employee_id, f"{current_year_month}%")).fetchone()
 
     # 获取假期余额
     leave_balances = db.execute("""
         SELECT leave_type, total_days, used_days, remaining_days
         FROM leave_balances
-        WHERE employee_id=? AND year=2026
-    """, (employee_id,)).fetchall()
+        WHERE employee_id=? AND year=?
+    """, (employee_id, current_year)).fetchall()
 
     # 获取最近工时记录
     recent_ts = db.execute("""
@@ -344,9 +492,10 @@ def get_my_salary_config(user=Depends(get_user)):
         raise HTTPException(404, "员工信息不存在")
 
     # 获取员工可能工作的仓库列表
-    wh_list = [emp["primary_wh"]]
-    if emp["dispatch_whs"]:
-        wh_list.extend(emp["dispatch_whs"].split(","))
+    wh_list = [emp["primary_wh"]] if emp.get("primary_wh") else []
+    if emp.get("dispatch_whs"):
+        dispatch_list = [wh.strip() for wh in emp["dispatch_whs"].split(",") if wh.strip()]
+        wh_list.extend(dispatch_list)
     wh_list = list(set(filter(None, wh_list)))
 
     # 获取各仓库的薪资配置
@@ -436,6 +585,24 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
     data = await request.json()
     if "id" not in data: data["id"] = f"WT-{uuid.uuid4().hex[:8]}"
 
+    # 检查是否已存在相同的工时记录
+    employee_id = data.get("employee_id")
+    work_date = data.get("work_date")
+    warehouse_code = data.get("warehouse_code")
+    
+    if employee_id and work_date and warehouse_code:
+        db = database.get_db()
+        existing = db.execute("""
+            SELECT id FROM timesheet 
+            WHERE employee_id=? AND work_date=? AND warehouse_code=?
+        """, (employee_id, work_date, warehouse_code)).fetchone()
+        
+        if existing:
+            db.close()
+            raise HTTPException(400, f"该员工在该日期和仓库已有工时记录 (ID: {existing['id']})")
+        
+        db.close()
+
     # 根据仓库获取薪资配置
     wh = data.get("warehouse_code")
     grade = data.get("grade")
@@ -489,15 +656,23 @@ def get_payroll_summary(month: Optional[str] = None, user=Depends(get_user)):
 
 @app.post("/api/timesheet/batch-approve")
 async def batch_approve(request: Request, user=Depends(get_user)):
-    body = await request.json(); db = database.get_db()
-    for tid in body.get("ids", []):
-        if body.get("type") == "wh":
-            db.execute("UPDATE timesheet SET wh_status='已仓库审批',wh_approver=?,wh_approve_time=? WHERE id=?",
-                       (user.get("display_name",""), datetime.now().isoformat(), tid))
-        else:
-            db.execute("UPDATE timesheet SET wh_status='已入账',fin_approver=?,fin_approve_time=? WHERE id=?",
-                       (user.get("display_name",""), datetime.now().isoformat(), tid))
-    db.commit(); db.close(); return {"ok": True}
+    body = await request.json()
+    db = database.get_db()
+    try:
+        for tid in body.get("ids", []):
+            if body.get("type") == "wh":
+                db.execute("UPDATE timesheet SET wh_status='已仓库审批',wh_approver=?,wh_approve_time=? WHERE id=?",
+                           (user.get("display_name",""), datetime.now().isoformat(), tid))
+            else:
+                db.execute("UPDATE timesheet SET wh_status='已入账',fin_approver=?,fin_approve_time=? WHERE id=?",
+                           (user.get("display_name",""), datetime.now().isoformat(), tid))
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"批量审批失败: {str(e)}")
+    finally:
+        db.close()
 
 # ── Containers ──
 @app.get("/api/containers")
@@ -507,11 +682,18 @@ def get_containers(user=Depends(get_user)): return q("container_records")
 async def create_container(request: Request, user=Depends(get_user)):
     data = await request.json()
     if "id" not in data: data["id"] = f"CT-{uuid.uuid4().hex[:6]}"
+    
+    # Calculate duration with validation
     if data.get("start_time") and data.get("end_time"):
-        sh,sm = map(int, data["start_time"].split(":")); eh,em = map(int, data["end_time"].split(":"))
-        mins = (eh*60+em)-(sh*60+sm)
-        if mins < 0: mins += 1440
-        data["duration_minutes"] = mins
+        try:
+            sh, sm = map(int, data["start_time"].split(":"))
+            eh, em = map(int, data["end_time"].split(":"))
+            mins = (eh*60+em)-(sh*60+sm)
+            if mins < 0: mins += 1440
+            data["duration_minutes"] = mins
+        except (ValueError, AttributeError) as e:
+            # Invalid time format - raise error for user feedback
+            raise HTTPException(400, f"无效的时间格式: {data.get('start_time')} - {data.get('end_time')}")
 
     # 根据仓库获取装卸柜薪资
     wh = data.get("warehouse_code")
@@ -523,7 +705,7 @@ async def create_container(request: Request, user=Depends(get_user)):
         if wh_info:
             rate_map = {"20GP": "rate_20gp", "40GP": "rate_40gp", "45HC": "rate_45hc"}
             rate_col = rate_map.get(container_type, "rate_40gp")
-            data["client_revenue"] = wh_info[rate_col] if wh_info[rate_col] else 0
+            data["client_revenue"] = wh_info[rate_col] if wh_info.get(rate_col) else 0
         db.close()
 
     insert("container_records", data); return {"ok": True}
@@ -634,9 +816,10 @@ async def update_lr(lid: str, request: Request, user=Depends(get_user)):
     if data.get("status") == "已批准":
         lr = q("leave_requests", "id=?", (lid,))
         if lr:
+            current_year = get_current_year()
             db = database.get_db()
-            db.execute("UPDATE leave_balances SET used_days=used_days+?,remaining_days=remaining_days-? WHERE employee_id=? AND year=2026 AND leave_type=?",
-                (lr[0]["days"], lr[0]["days"], lr[0]["employee_id"], lr[0]["leave_type"]))
+            db.execute("UPDATE leave_balances SET used_days=used_days+?,remaining_days=remaining_days-? WHERE employee_id=? AND year=? AND leave_type=?",
+                (lr[0]["days"], lr[0]["days"], lr[0]["employee_id"], current_year, lr[0]["leave_type"]))
             db.commit(); db.close()
     return {"ok": True}
 
@@ -689,6 +872,7 @@ def get_settlement(mode: str = "own", user=Depends(get_user)):
 @app.get("/api/analytics/dashboard")
 def dashboard(user=Depends(get_user)):
     db = database.get_db()
+    current_year_month = get_current_year_month()
     r = {
         "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职'").fetchone()[0],
         "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职'").fetchone()[0],
@@ -697,7 +881,7 @@ def dashboard(user=Depends(get_user)):
         "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests WHERE status='待审批'").fetchone()[0],
         "pending_expense": db.execute("SELECT COUNT(*) FROM expense_claims WHERE status IN ('已提交','待审批')").fetchone()[0],
         "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE wh_status='待仓库审批'").fetchone()[0],
-        "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE work_date LIKE '2026-02%'").fetchone()[0],
+        "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE work_date LIKE ?", (f"{current_year_month}%",)).fetchone()[0],
         "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' GROUP BY grade ORDER BY grade").fetchall()],
         "wh_dist": [dict(r) for r in db.execute("SELECT primary_wh w,COUNT(*) c FROM employees WHERE status='在职' GROUP BY primary_wh").fetchall()],
     }

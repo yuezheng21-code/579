@@ -288,6 +288,20 @@ def init_db():
     ]
     for sql in tables:
         c.execute(sql)
+    
+    # Create indexes for better performance and data integrity
+    indexes = [
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_timesheet_unique ON timesheet(employee_id, work_date, warehouse_code)",
+        "CREATE INDEX IF NOT EXISTS idx_timesheet_date ON timesheet(work_date)",
+        "CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status)",
+        "CREATE INDEX IF NOT EXISTS idx_users_employee ON users(employee_id)",
+    ]
+    for idx_sql in indexes:
+        try:
+            c.execute(idx_sql)
+        except Exception:
+            pass  # Index might already exist
+    
     conn.commit(); conn.close()
 
 def hash_password(password):
