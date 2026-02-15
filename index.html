@@ -2006,7 +2006,7 @@ const RegionPage=({t,user})=>{
           React.createElement('span',{style:{marginLeft:8,fontSize:12,color:'var(--text3)'}},reg.code)),
         React.createElement('div',{style:{display:'flex',gap:4}},
           isAdmin&&React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(reg)},'编辑'),
-          user&&user.role==='admin'&&React.createElement('button',{className:'btn btn-sm btn-ghost',style:{color:'var(--red)'},onClick:()=>del(reg.code)},'删除'))),
+          (user&&(user.role==='admin'||user.role==='ceo'))&&React.createElement('button',{className:'btn btn-sm btn-ghost',style:{color:'var(--red)'},onClick:()=>del(reg.code)},'删除'))),
       React.createElement('div',{style:{display:'flex',gap:24,flexWrap:'wrap'}},
         React.createElement('div',{style:{flex:1,minWidth:200}},
           React.createElement('div',{style:{fontSize:12,color:'var(--text3)',marginBottom:4}},'👤 大区经理'),

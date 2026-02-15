@@ -2053,8 +2053,11 @@ async def update_region(code: str, request: Request, user=Depends(get_user)):
         # Update region record
         sets = ",".join(f"{k}=?" for k in data.keys())
         db.execute(f"UPDATE regions SET {sets} WHERE code=?", list(data.values()) + [code])
-        # Set new warehouse region fields
-        new_wh_codes = [c.strip() for c in (data.get("warehouse_codes") or old["warehouse_codes"] or "").split(",") if c.strip()]
+        # Set new warehouse region fields only if warehouse_codes was provided or unchanged
+        if "warehouse_codes" in data:
+            new_wh_codes = [c.strip() for c in (data["warehouse_codes"] or "").split(",") if c.strip()]
+        else:
+            new_wh_codes = old_wh_codes
         region_name = data.get("name", old["name"])
         for wc in new_wh_codes:
             db.execute("UPDATE warehouses SET region=?, updated_at=? WHERE code=?",
