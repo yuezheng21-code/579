@@ -763,16 +763,31 @@ async def test_ceo_login_yly():
 
 @pytest.mark.asyncio
 async def test_get_roles(auth_headers):
-    """Test roles endpoint returns hierarchy."""
+    """Test roles endpoint returns expanded hierarchy with position-based roles."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.get("/api/roles", headers=auth_headers)
     assert r.status_code == 200
     roles = r.json()
-    assert len(roles) >= 8
+    assert len(roles) >= 22  # expanded from 8 to 22 roles
     role_names = [ro["role"] for ro in roles]
     assert "admin" in role_names
     assert "ceo" in role_names
+    # Verify new position-based roles exist
+    assert "ops_director" in role_names
+    assert "regional_mgr" in role_names
+    assert "site_mgr" in role_names
+    assert "deputy_mgr" in role_names
+    assert "shift_leader" in role_names
+    assert "team_leader" in role_names
+    assert "fin_director" in role_names
+    assert "hr_manager" in role_names
+    assert "hr_assistant" in role_names
+    assert "hr_specialist" in role_names
+    assert "fin_assistant" in role_names
+    assert "fin_specialist" in role_names
+    assert "admin_assistant" in role_names
+    assert "admin_specialist" in role_names
     # admin level should be highest
     admin_role = next(ro for ro in roles if ro["role"] == "admin")
     ceo_role = next(ro for ro in roles if ro["role"] == "ceo")
@@ -1223,15 +1238,16 @@ async def test_admin_check_edit_permission_per_module(auth_headers):
 
 @pytest.mark.asyncio
 async def test_all_modules_have_permissions_seeded():
-    """All 27 modules should have permission_overrides for every role."""
+    """All modules should have permission_overrides for every role (including new position-based roles)."""
     ALL_MODULES = [
         "dashboard", "employees", "suppliers", "talent", "dispatch", "recruit",
         "timesheet", "settlement", "warehouse", "schedule", "templates",
         "clock", "container", "messages", "analytics", "admin", "logs",
         "grades", "quotation", "files", "leave", "expense", "performance",
-        "mypage", "accounts", "whsalary", "safety"
+        "mypage", "accounts", "whsalary", "safety", "regions"
     ]
-    ALL_ROLES = ["admin", "ceo", "hr", "wh", "fin", "sup", "mgr", "worker"]
+    from app import ROLE_HIERARCHY
+    ALL_ROLES = list(ROLE_HIERARCHY.keys())
     db = database.get_db()
     for role in ALL_ROLES:
         for mod in ALL_MODULES:
@@ -3149,6 +3165,240 @@ async def test_account_generate_nonexistent_employee(auth_headers):
         r = await ac.post("/api/accounts/generate", headers=auth_headers,
                           json={"employee_id": "NONEXIST-999"})
     assert r.status_code == 404
+
+
+# ── Job Positions Tests ──
+
+
+@pytest.mark.asyncio
+async def test_get_job_positions(auth_headers):
+    """Test that job positions are seeded and returned."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/job-positions", headers=auth_headers)
+    assert r.status_code == 200
+    positions = r.json()
+    assert len(positions) >= 18  # 18 seeded positions
+    codes = [p["code"] for p in positions]
+    assert "OPS-DIR" in codes
+    assert "REG-MGR" in codes
+    assert "SITE-MGR" in codes
+    assert "TEAM-LDR" in codes
+    assert "FIN-DIR" in codes
+    assert "HR-MGR" in codes
+    assert "WORKER" in codes
+
+
+@pytest.mark.asyncio
+async def test_get_job_position_detail(auth_headers):
+    """Test getting a single job position by code."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/job-positions/OPS-DIR", headers=auth_headers)
+    assert r.status_code == 200
+    pos = r.json()
+    assert pos["code"] == "OPS-DIR"
+    assert pos["title_zh"] == "运营总监"
+    assert pos["default_role"] == "ops_director"
+    assert pos["grade_code"] == "P9"
+    assert pos["data_scope"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_create_job_position(auth_headers):
+    """Admin can create a new job position."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/job-positions", headers=auth_headers,
+                          json={"code": "TEST-POS", "title_zh": "测试岗位",
+                                "category": "运营", "default_role": "worker"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert r.json()["code"] == "TEST-POS"
+
+
+@pytest.mark.asyncio
+async def test_update_job_position(auth_headers):
+    """Admin can update a job position."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/job-positions/WORKER", headers=auth_headers,
+                         json={"description": "Updated description"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_job_position(auth_headers):
+    """Admin can delete a job position."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create first, then delete
+        await ac.post("/api/job-positions", headers=auth_headers,
+                      json={"code": "DEL-POS", "title_zh": "待删岗位"})
+        r = await ac.delete("/api/job-positions/DEL-POS", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_create_job_position():
+    """Non-admin users cannot create job positions."""
+    from app import make_token
+    worker_token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {worker_token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/job-positions", headers=headers,
+                          json={"code": "FAIL-POS", "title_zh": "不允许"})
+    assert r.status_code == 403
+
+
+# ── Position-Based Role Permissions Tests ──
+
+
+@pytest.mark.asyncio
+async def test_ops_director_has_all_data_scope():
+    """Ops director should have 'all' data scope."""
+    from app import make_token
+    token = make_token("ops_dir", "ops_director")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["role"] == "ops_director"
+    assert data["role_level"] == 85
+    # Ops director should view all modules
+    emp_perm = data["permissions"].get("employees", {})
+    assert emp_perm.get("can_view") == 1
+    assert emp_perm.get("data_scope") == "all"
+
+
+@pytest.mark.asyncio
+async def test_regional_mgr_has_regional_scope():
+    """Regional manager should have 'regional' data scope."""
+    from app import make_token
+    token = make_token("reg_mgr", "regional_mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["role"] == "regional_mgr"
+    assert data["role_level"] == 80
+    emp_perm = data["permissions"].get("employees", {})
+    assert emp_perm.get("data_scope") == "regional"
+
+
+@pytest.mark.asyncio
+async def test_site_mgr_has_own_warehouse_scope():
+    """Site manager should have 'own_warehouse' data scope."""
+    from app import make_token
+    token = make_token("site_mgr1", "site_mgr")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["role"] == "site_mgr"
+    assert data["role_level"] == 75
+    emp_perm = data["permissions"].get("employees", {})
+    assert emp_perm.get("data_scope") == "own_warehouse"
+
+
+@pytest.mark.asyncio
+async def test_site_mgr_hidden_fields():
+    """Site manager should have tax/iban hidden from employee records."""
+    db = database.get_db()
+    perm = db.execute(
+        "SELECT hidden_fields FROM permission_overrides WHERE role='site_mgr' AND module='employees'"
+    ).fetchone()
+    db.close()
+    assert perm is not None
+    assert "iban" in perm["hidden_fields"]
+    assert "tax_no" in perm["hidden_fields"]
+
+
+@pytest.mark.asyncio
+async def test_team_leader_restricted_view():
+    """Team leader should have restricted view (no salary/sensitive fields)."""
+    db = database.get_db()
+    perm = db.execute(
+        "SELECT hidden_fields, data_scope FROM permission_overrides WHERE role='team_leader' AND module='employees'"
+    ).fetchone()
+    db.close()
+    assert perm is not None
+    assert "base_salary" in perm["hidden_fields"]
+    assert "iban" in perm["hidden_fields"]
+    assert perm["data_scope"] == "own_warehouse"
+
+
+@pytest.mark.asyncio
+async def test_hr_manager_sees_all_employee_data():
+    """HR manager should see all employee data (no hidden fields)."""
+    db = database.get_db()
+    perm = db.execute(
+        "SELECT hidden_fields, data_scope FROM permission_overrides WHERE role='hr_manager' AND module='employees'"
+    ).fetchone()
+    db.close()
+    assert perm is not None
+    assert perm["hidden_fields"] == ""
+    assert perm["data_scope"] == "all"
+
+
+@pytest.mark.asyncio
+async def test_fin_director_limited_employee_fields():
+    """Finance director should have limited employee field visibility."""
+    db = database.get_db()
+    perm = db.execute(
+        "SELECT hidden_fields FROM permission_overrides WHERE role='fin_director' AND module='employees'"
+    ).fetchone()
+    db.close()
+    assert perm is not None
+    assert "emergency_contact" in perm["hidden_fields"]
+
+
+@pytest.mark.asyncio
+async def test_job_positions_linked_to_grades():
+    """Job positions should be linked to grade codes."""
+    transport = ASGITransport(app=app)
+    from app import make_token
+    token = make_token("admin", "admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/job-positions", headers=headers)
+    assert r.status_code == 200
+    positions = r.json()
+    # Verify positions link to proper grades
+    ops_dir = next(p for p in positions if p["code"] == "OPS-DIR")
+    assert ops_dir["grade_code"] == "P9"
+    assert ops_dir["category"] == "运营"
+    reg_mgr = next(p for p in positions if p["code"] == "REG-MGR")
+    assert reg_mgr["grade_code"] == "P8"
+    hr_mgr = next(p for p in positions if p["code"] == "HR-MGR")
+    assert hr_mgr["grade_code"] == "M4"
+    assert hr_mgr["category"] == "人事"
+
+
+@pytest.mark.asyncio
+async def test_new_roles_have_correct_hierarchy():
+    """Verify new position-based roles have correct hierarchy levels in ROLE_HIERARCHY."""
+    from app import ROLE_HIERARCHY
+    assert ROLE_HIERARCHY["ops_director"] == 85
+    assert ROLE_HIERARCHY["regional_mgr"] == 80
+    assert ROLE_HIERARCHY["site_mgr"] == 75
+    assert ROLE_HIERARCHY["deputy_mgr"] == 70
+    assert ROLE_HIERARCHY["shift_leader"] == 65
+    assert ROLE_HIERARCHY["team_leader"] == 60
+    assert ROLE_HIERARCHY["hr_manager"] == 60
+    assert ROLE_HIERARCHY["fin_director"] == 55
+    # Ops director should be between CEO and regional_mgr
+    assert ROLE_HIERARCHY["ceo"] > ROLE_HIERARCHY["ops_director"]
+    assert ROLE_HIERARCHY["ops_director"] > ROLE_HIERARCHY["regional_mgr"]
 
 
 @pytest.mark.asyncio

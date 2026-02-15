@@ -161,7 +161,7 @@ ALLOWED_TABLES = {
     "employee_files", "leave_types", "talent_pool", "recruit_progress",
     "schedules", "messages", "permission_overrides", "enterprise_documents",
     "safety_incidents", "id_naming_rules", "payslips", "payroll_confirmations",
-    "dispatch_transfers", "regions"
+    "dispatch_transfers", "regions", "job_positions"
 }
 
 # Table-specific allowed order columns for validation
@@ -202,6 +202,7 @@ TABLE_ORDER_COLUMNS = {
     "payroll_confirmations": ["id", "created_at", "month"],
     "dispatch_transfers": ["id", "created_at", "dispatch_date"],
     "regions": ["code", "name", "created_at", "updated_at"],
+    "job_positions": ["code", "level", "category", "created_at", "updated_at"],
 }
 
 def _validate_table_name(table: str):
@@ -238,7 +239,7 @@ def q(table, where="1=1", params=(), order="id DESC", limit=500):
     # Ensure limit is an integer
     try:
         limit = int(limit)
-        if limit <= 0 or limit > 1000:
+        if limit <= 0 or limit > 5000:
             limit = 500
     except (ValueError, TypeError):
         limit = 500
@@ -412,7 +413,7 @@ async def create_employee(request: Request, user=Depends(get_user)):
     result = {"ok": True, "id": data["id"]}
     # Optionally create a system account for the new employee
     if create_account:
-        VALID_ROLES = {"admin", "ceo", "mgr", "hr", "fin", "wh", "sup", "worker"}
+        VALID_ROLES = set(ROLE_HIERARCHY.keys())
         if account_role not in VALID_ROLES:
             account_role = "worker"
         employee_id = data["id"]
@@ -1715,8 +1716,10 @@ def get_recruit(user=Depends(get_user)): return q("recruit_progress")
 @app.get("/api/schedules")
 def get_schedules(user=Depends(get_user)):
     role = user.get("role", "worker")
-    # Worker/mgr with employee_id: apply grade-based data scope
-    if role in ("worker", "mgr") and user.get("employee_id"):
+    # Worker/mgr/operational roles with employee_id: apply grade-based data scope
+    operational_roles = ("worker", "mgr", "team_leader", "shift_leader", "deputy_mgr",
+                         "site_mgr", "regional_mgr", "ops_director")
+    if role in operational_roles and user.get("employee_id"):
         scope = _check_grade_data_scope(user)
         if scope == "self_only":
             return q("schedules", "employee_id=?", (user["employee_id"],), order="work_date ASC")
@@ -1847,13 +1850,50 @@ def dashboard(user=Depends(get_user)):
 ROLE_HIERARCHY = {
     "admin": 100,  # God view - highest permission level
     "ceo": 90,     # CEO level - 王博 and 袁梁毅
-    "mgr": 70,     # Manager
-    "hr": 60,      # HR
-    "fin": 50,     # Finance
-    "wh": 40,      # Warehouse
+    "ops_director": 85,  # 运营总监 - Operations Director (P9)
+    "regional_mgr": 80,  # 区域经理 - Regional Manager (P8)
+    "site_mgr": 75,      # 驻仓经理 - Site Manager (P7)
+    "mgr": 70,     # Manager (legacy general)
+    "deputy_mgr": 70,    # 副经理 - Deputy Manager (P6)
+    "shift_leader": 65,  # 班组长 - Shift Leader (P5)
+    "hr": 60,      # HR (legacy)
+    "hr_manager": 60,    # 人事经理 - HR Manager
+    "team_leader": 60,   # 组长 - Team Leader (P4)
+    "fin_director": 55,  # 财务总监 - Finance Director
+    "fin": 50,     # Finance (legacy)
+    "hr_assistant": 45,  # 人事助理 - HR Assistant
+    "fin_assistant": 45, # 财务助理 - Finance Assistant
+    "wh": 40,      # Warehouse (legacy)
+    "hr_specialist": 40, # 人事专员 - HR Specialist
+    "fin_specialist": 40,# 财务专员 - Finance Specialist
+    "admin_assistant": 40,  # 行政助理 - Admin Assistant
+    "admin_specialist": 35, # 行政专员 - Admin Specialist
     "sup": 30,     # Supplier
     "worker": 10,  # Worker
 }
+
+# Role sets for access control — derived from organizational hierarchy
+# Roles with full data access (bypasses grade-based scope)
+FULL_ACCESS_ROLES = frozenset({
+    "admin", "ceo", "ops_director", "hr", "hr_manager", "hr_assistant", "hr_specialist",
+    "fin", "fin_director", "fin_assistant", "fin_specialist",
+    "admin_assistant", "admin_specialist"
+})
+# Roles that can submit dispatch (personnel) requests directly
+DISPATCH_REQUEST_ROLES = frozenset({
+    "admin", "ceo", "hr", "mgr", "ops_director", "regional_mgr", "site_mgr",
+    "deputy_mgr", "shift_leader", "hr_manager"
+})
+# Roles that can submit transfer (调仓) requests
+TRANSFER_REQUEST_ROLES = frozenset({
+    "admin", "ceo", "hr", "ops_director", "hr_manager", "site_mgr"
+})
+# Roles that can view all dispatch transfers
+TRANSFER_VIEW_ALL_ROLES = frozenset({
+    "admin", "ceo", "hr", "ops_director", "hr_manager", "hr_assistant", "hr_specialist"
+})
+# Roles that can manage regions
+REGION_MANAGE_ROLES = frozenset({"admin", "ceo", "mgr", "ops_director"})
 
 # Grade-based permission levels for operational staff (P-series)
 # P0-P2: self_only — can only see own data, schedules, and timesheets
@@ -1920,19 +1960,25 @@ def _get_region_warehouses(warehouse_code: str) -> list:
 
 def _check_grade_data_scope(user: dict) -> str:
     """Determine data access scope based on employee grade.
-    Returns: 'all', 'regional', 'own_warehouse', 'self_only'.
-    For roles admin/ceo/hr/fin, always returns 'all' (bypasses grade check).
-    For mgr role, uses grade-based scope if employee_id is linked."""
+    Returns: 'all', 'regional', 'own_warehouse', 'self_only', 'own_supplier'.
+    For roles admin/ceo/ops_director/hr/hr_manager/fin/fin_director and other full-access roles,
+    always returns 'all' (bypasses grade check).
+    For operational roles, uses grade-based scope if employee_id is linked."""
     role = user.get("role", "worker")
-    if role in ("admin", "ceo", "hr", "fin"):
+    if role in FULL_ACCESS_ROLES:
         return "all"
+    if role == "regional_mgr":
+        return "regional"
+    if role in ("site_mgr", "deputy_mgr", "shift_leader", "team_leader", "wh"):
+        grade = _get_employee_grade(user)
+        if grade:
+            gp = _get_grade_permissions(grade)
+            return gp["data_scope"]
+        return "own_warehouse"
+    if role == "sup":
+        return "own_supplier"
     grade = _get_employee_grade(user)
     if not grade:
-        # No employee linked, fall back to role-based scope
-        if role == "wh":
-            return "own_warehouse"
-        if role == "sup":
-            return "own_supplier"
         return "self_only"
     gp = _get_grade_permissions(grade)
     return gp["data_scope"]
@@ -1942,7 +1988,7 @@ def _get_role_level(role: str) -> int:
     return ROLE_HIERARCHY.get(role, 0)
 
 @app.get("/api/permissions")
-def get_perms(user=Depends(get_user)): return q("permission_overrides", order="role ASC, module ASC")
+def get_perms(user=Depends(get_user)): return q("permission_overrides", order="role ASC, module ASC", limit=1000)
 
 @app.get("/api/permissions/check")
 def check_permissions(module: str, user=Depends(get_user)):
@@ -2053,8 +2099,8 @@ def get_regions(user=Depends(get_user)):
 
 @app.post("/api/regions")
 async def create_region(request: Request, user=Depends(get_user)):
-    """Create a new region. Admin/CEO/MGR only."""
-    if user.get("role") not in ("admin", "ceo", "mgr"):
+    """Create a new region. Admin/CEO/MGR/Ops Director only."""
+    if user.get("role") not in REGION_MANAGE_ROLES:
         raise HTTPException(403, "无权创建大区 / No permission to create region")
     data = await request.json()
     if not data.get("code") or not data.get("name"):
@@ -2082,8 +2128,8 @@ async def create_region(request: Request, user=Depends(get_user)):
 
 @app.put("/api/regions/{code}")
 async def update_region(code: str, request: Request, user=Depends(get_user)):
-    """Update a region. Admin/CEO/MGR only."""
-    if user.get("role") not in ("admin", "ceo", "mgr"):
+    """Update a region. Admin/CEO/MGR/Ops Director only."""
+    if user.get("role") not in REGION_MANAGE_ROLES:
         raise HTTPException(403, "无权修改大区 / No permission to update region")
     data = await request.json()
     data.pop("code", None)
@@ -2199,13 +2245,27 @@ def get_roles(user=Depends(get_user)):
     """Get all available roles with hierarchy levels"""
     return [
         {"role": "admin", "label": "系统管理员", "level": 100, "description": "上帝视角 - 最高权限"},
-        {"role": "ceo", "label": "CEO", "level": 90, "description": "公司最高管理层 (王博/袁梁毅)"},
-        {"role": "mgr", "label": "经理", "level": 70, "description": "部门/区域经理"},
-        {"role": "hr", "label": "人事", "level": 60, "description": "人力资源管理"},
-        {"role": "fin", "label": "财务", "level": 50, "description": "财务管理"},
-        {"role": "wh", "label": "仓库", "level": 40, "description": "仓库管理"},
+        {"role": "ceo", "label": "老板/CEO", "level": 90, "description": "公司最高管理层 (王博/袁梁毅)"},
+        {"role": "ops_director", "label": "运营总监", "level": 85, "description": "对所有仓有修改权 (P9)"},
+        {"role": "regional_mgr", "label": "区域经理", "level": 80, "description": "对其区域管辖仓库有修改权，薪资/报价有范围权限 (P8)"},
+        {"role": "site_mgr", "label": "驻仓经理", "level": 75, "description": "对其负责仓库有修改权，薪资/报价有范围限制 (P7)"},
+        {"role": "deputy_mgr", "label": "副经理", "level": 70, "description": "整仓代管，协助驻仓经理 (P6)"},
+        {"role": "shift_leader", "label": "班组长", "level": 65, "description": "独立负责整班次，可提交人员需求 (P5)"},
+        {"role": "team_leader", "label": "组长", "level": 60, "description": "带班3-10人，本仓数据权限，薪资仅建议权 (P4)"},
+        {"role": "hr_manager", "label": "人事经理", "level": 60, "description": "人力资源管理负责人"},
+        {"role": "fin_director", "label": "财务总监", "level": 55, "description": "公司财务最高负责人"},
+        {"role": "hr_assistant", "label": "人事助理", "level": 45, "description": "协助人事工作"},
+        {"role": "fin_assistant", "label": "财务助理", "level": 45, "description": "协助财务工作"},
+        {"role": "hr_specialist", "label": "人事专员", "level": 40, "description": "独立人事流程"},
+        {"role": "fin_specialist", "label": "财务专员", "level": 40, "description": "独立财务流程"},
+        {"role": "admin_assistant", "label": "行政助理", "level": 40, "description": "日常行政工作"},
+        {"role": "admin_specialist", "label": "行政专员", "level": 35, "description": "独立行政流程"},
+        {"role": "mgr", "label": "经理", "level": 70, "description": "部门/区域经理 (通用)"},
+        {"role": "hr", "label": "人事", "level": 60, "description": "人力资源管理 (通用)"},
+        {"role": "fin", "label": "财务", "level": 50, "description": "财务管理 (通用)"},
+        {"role": "wh", "label": "仓库", "level": 40, "description": "仓库管理 (通用)"},
         {"role": "sup", "label": "供应商", "level": 30, "description": "供应商账号"},
-        {"role": "worker", "label": "员工", "level": 10, "description": "一线工人"},
+        {"role": "worker", "label": "员工/工人", "level": 10, "description": "一线工人 (P0-P3)"},
     ]
 
 # Module field definitions with Chinese labels and sensitivity markers
@@ -2276,6 +2336,89 @@ def get_field_definitions(module: str, user=Depends(get_user)):
         raise HTTPException(403, "仅管理员可查看字段定义")
     fields = MODULE_FIELD_DEFINITIONS.get(module, {})
     return {"module": module, "fields": fields}
+
+# ── Job Positions (岗位定义 - 可自行设定，关联到花名册) ──
+
+@app.get("/api/job-positions")
+def get_job_positions(user=Depends(get_user)):
+    """Get all job positions. Returns list of defined positions linked to grade levels and roles."""
+    return q("job_positions", order="level DESC, code ASC")
+
+@app.get("/api/job-positions/{code}")
+def get_job_position(code: str, user=Depends(get_user)):
+    """Get a specific job position by code."""
+    db = database.get_db()
+    try:
+        row = db.execute("SELECT * FROM job_positions WHERE code=?", (code,)).fetchone()
+        if not row:
+            raise HTTPException(404, "岗位不存在 / Position not found")
+        return dict(row)
+    finally:
+        db.close()
+
+@app.post("/api/job-positions")
+async def create_job_position(request: Request, user=Depends(get_user)):
+    """Create a new job position. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可创建岗位 / Only admin can create positions")
+    data = await request.json()
+    if not data.get("code") or not data.get("title_zh"):
+        raise HTTPException(400, "岗位编码和中文名称不能为空 / Position code and Chinese title required")
+    data.setdefault("status", "启用")
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    try:
+        insert("job_positions", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建岗位失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "job_positions", data["code"], f"创建岗位: {data.get('title_zh','')}")
+    return {"ok": True, "code": data["code"]}
+
+@app.put("/api/job-positions/{code}")
+async def update_job_position(code: str, request: Request, user=Depends(get_user)):
+    """Update a job position. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可修改岗位 / Only admin can update positions")
+    data = await request.json()
+    data.pop("code", None)
+    data["updated_at"] = datetime.now().isoformat()
+    db = database.get_db()
+    try:
+        old = db.execute("SELECT * FROM job_positions WHERE code=?", (code,)).fetchone()
+        if not old:
+            raise HTTPException(404, "岗位不存在 / Position not found")
+        sets = ",".join(f"{k}=?" for k in data.keys())
+        db.execute(f"UPDATE job_positions SET {sets} WHERE code=?", list(data.values()) + [code])
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"更新岗位失败: {str(e)}")
+    finally:
+        db.close()
+    audit_log(user.get("username", ""), "update", "job_positions", code, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+@app.delete("/api/job-positions/{code}")
+def delete_job_position(code: str, user=Depends(get_user)):
+    """Delete a job position. Admin only."""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可删除岗位 / Only admin can delete positions")
+    db = database.get_db()
+    try:
+        old = db.execute("SELECT * FROM job_positions WHERE code=?", (code,)).fetchone()
+        if not old:
+            raise HTTPException(404, "岗位不存在 / Position not found")
+        db.execute("DELETE FROM job_positions WHERE code=?", (code,))
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"删除岗位失败: {str(e)}")
+    finally:
+        db.close()
+    audit_log(user.get("username", ""), "delete", "job_positions", code, f"删除岗位: {old['title_zh']}")
+    return {"ok": True}
 
 # ── Batch Import / Export ──
 
@@ -2672,9 +2815,9 @@ async def create_dispatch(request: Request, user=Depends(get_user)):
     data = await request.json()
     if not data.get("warehouse_code"):
         raise HTTPException(400, "仓库编码不能为空")
-    # Grade-based check: P5+ can submit personnel requests, or admin/ceo/hr/mgr roles
+    # Grade-based check: P5+ can submit personnel requests, or roles in DISPATCH_REQUEST_ROLES
     role = user.get("role", "worker")
-    if role not in ("admin", "ceo", "hr", "mgr"):
+    if role not in DISPATCH_REQUEST_ROLES:
         grade = _get_employee_grade(user)
         gp = _get_grade_permissions(grade)
         if not gp["can_dispatch_request"]:
@@ -2728,7 +2871,7 @@ async def update_schedule(sid: str, request: Request, user=Depends(get_user)):
 def get_dispatch_transfers(user=Depends(get_user)):
     """获取人员调仓记录列表"""
     role = user.get("role", "worker")
-    if role in ("admin", "ceo", "hr"):
+    if role in TRANSFER_VIEW_ALL_ROLES:
         return q("dispatch_transfers", order="created_at DESC")
     # Grade-based scoping
     if user.get("employee_id"):
@@ -2750,10 +2893,10 @@ def get_dispatch_transfers(user=Depends(get_user)):
 
 @app.post("/api/dispatch-transfers")
 async def create_dispatch_transfer(request: Request, user=Depends(get_user)):
-    """创建人员调仓申请 - P7及以上或admin/ceo/hr可发起"""
+    """创建人员调仓申请 - P7及以上或admin/ceo/hr/ops_director/site_mgr可发起"""
     role = user.get("role", "worker")
-    # Grade-based check: P7+ can submit transfer requests, or admin/ceo/hr
-    if role not in ("admin", "ceo", "hr"):
+    # Grade-based check: P7+ can submit transfer requests, or roles in TRANSFER_REQUEST_ROLES
+    if role not in TRANSFER_REQUEST_ROLES:
         grade = _get_employee_grade(user)
         gp = _get_grade_permissions(grade)
         if not gp["can_transfer_request"]:
