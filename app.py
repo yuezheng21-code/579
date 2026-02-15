@@ -119,21 +119,21 @@ ALLOWED_TABLES = {
 
 # Table-specific allowed order columns for validation
 TABLE_ORDER_COLUMNS = {
-    "employees": ["rowid", "id", "created_at", "updated_at", "name", "grade", "status"],
-    "users": ["rowid", "id", "created_at", "username"],
-    "timesheet": ["rowid", "id", "created_at", "updated_at", "work_date", "employee_id"],
-    "leave_requests": ["rowid", "id", "created_at", "start_date", "end_date"],
-    "expense_claims": ["rowid", "id", "created_at", "status"],
-    "performance_reviews": ["rowid", "id", "created_at"],
-    "warehouses": ["rowid", "id", "code", "name"],
-    "suppliers": ["rowid", "id", "name"],
-    "business_lines": ["rowid", "id", "name"],
-    "employee_grades": ["rowid", "id", "grade"],
-    "warehouse_salary_config": ["rowid", "id", "created_at", "updated_at", "warehouse_code", "grade"],
-    "leave_balances": ["rowid", "id", "employee_id"],
-    "dispatch_needs": ["rowid", "id", "created_at"],
-    "container_tasks": ["rowid", "id", "created_at"],
-    "audit_logs": ["rowid", "id", "timestamp"],
+    "employees": ["id", "created_at", "updated_at", "name", "grade", "status"],
+    "users": ["created_at", "username", "id"],
+    "timesheet": ["id", "created_at", "updated_at", "work_date", "employee_id"],
+    "leave_requests": ["id", "created_at", "start_date", "end_date"],
+    "expense_claims": ["id", "created_at", "status"],
+    "performance_reviews": ["id", "created_at"],
+    "warehouses": ["code", "name"],
+    "suppliers": ["id", "name"],
+    "business_lines": ["id", "name"],
+    "employee_grades": ["id", "grade"],
+    "warehouse_salary_config": ["id", "created_at", "updated_at", "warehouse_code", "grade"],
+    "leave_balances": ["id", "employee_id"],
+    "dispatch_needs": ["id", "created_at"],
+    "container_tasks": ["id", "created_at"],
+    "audit_logs": ["id", "timestamp"],
 }
 
 def _validate_table_name(table: str):
@@ -152,13 +152,13 @@ def _validate_order_clause(order: str, table: str):
     
     column = match.group(1)
     # Check if column is allowed for this specific table
-    allowed_cols = TABLE_ORDER_COLUMNS.get(table, ["rowid", "id"])
+    allowed_cols = TABLE_ORDER_COLUMNS.get(table, ["id"])
     if column not in allowed_cols:
         raise HTTPException(400, f"Invalid order column '{column}' for table '{table}'")
     
     return order
 
-def q(table, where="1=1", params=(), order="rowid DESC", limit=500):
+def q(table, where="1=1", params=(), order="id DESC", limit=500):
     _validate_table_name(table)
     _validate_order_clause(order, table)
     

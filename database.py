@@ -1,15 +1,168 @@
-"""渊博+579 HR V6 Database — All Modules (Enhanced with Warehouse Salary Config)"""
-import sqlite3, os, random, json
+"""渊博+579 HR V6 Database — All Modules (Enhanced with Warehouse Salary Config)
+Database Abstraction Layer supporting both SQLite and PostgreSQL
+"""
+import os, random, json
 from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "hr_system.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+# Determine database type based on DATABASE_URL
+USE_POSTGRES = DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://")
+
+if USE_POSTGRES:
+    import psycopg2
+    import psycopg2.extras
+    import psycopg2.extensions
+else:
+    import sqlite3
+
+
+class CursorWrapper:
+    """Wrapper for cursor to handle placeholder conversion and result formatting"""
+    def __init__(self, cursor, is_postgres=False):
+        self._cursor = cursor
+        self._is_postgres = is_postgres
+    
+    def _convert_placeholders(self, sql):
+        """Convert ? placeholders to %s for PostgreSQL, avoiding string literals"""
+        if not self._is_postgres or '?' not in sql:
+            return sql
+        
+        # More robust placeholder conversion that avoids string literals
+        result = []
+        in_single_quote = False
+        in_double_quote = False
+        i = 0
+        
+        while i < len(sql):
+            char = sql[i]
+            
+            # Track quote state
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+                result.append(char)
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+                result.append(char)
+            # Convert ? to %s only outside of quotes
+            elif char == '?' and not in_single_quote and not in_double_quote:
+                result.append('%s')
+            else:
+                result.append(char)
+            
+            i += 1
+        
+        return ''.join(result)
+    
+    def execute(self, sql, params=()):
+        """Execute SQL with automatic placeholder conversion"""
+        sql = self._convert_placeholders(sql)
+        return self._cursor.execute(sql, params)
+    
+    def executemany(self, sql, params_list):
+        """Execute SQL multiple times with automatic placeholder conversion"""
+        sql = self._convert_placeholders(sql)
+        return self._cursor.executemany(sql, params_list)
+    
+    def fetchone(self):
+        return self._cursor.fetchone()
+    
+    def fetchall(self):
+        return self._cursor.fetchall()
+    
+    def fetchmany(self, size=None):
+        if size is None:
+            return self._cursor.fetchmany()
+        return self._cursor.fetchmany(size)
+    
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+    
+    @property
+    def lastrowid(self):
+        return self._cursor.lastrowid
+    
+    def __iter__(self):
+        return iter(self._cursor)
+
+
+class DBWrapper:
+    """Wrapper for database connection to handle differences between SQLite and PostgreSQL"""
+    def __init__(self, conn, is_postgres=False):
+        self._conn = conn
+        self._is_postgres = is_postgres
+    
+    def execute(self, sql, params=()):
+        """Execute SQL with automatic placeholder conversion"""
+        cursor = self.cursor()
+        cursor.execute(sql, params)
+        return cursor
+    
+    def cursor(self):
+        """Get a cursor wrapper"""
+        if self._is_postgres:
+            # Use RealDictCursor for PostgreSQL to get dict-like results
+            raw_cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            raw_cursor = self._conn.cursor()
+        return CursorWrapper(raw_cursor, self._is_postgres)
+    
+    def commit(self):
+        return self._conn.commit()
+    
+    def rollback(self):
+        return self._conn.rollback()
+    
+    def close(self):
+        return self._conn.close()
+    
+    @property
+    def row_factory(self):
+        if hasattr(self._conn, 'row_factory'):
+            return self._conn.row_factory
+        return None
+    
+    @row_factory.setter
+    def row_factory(self, factory):
+        if hasattr(self._conn, 'row_factory'):
+            self._conn.row_factory = factory
+
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    """Get database connection with abstraction layer"""
+    if USE_POSTGRES:
+        conn = psycopg2.connect(DATABASE_URL)
+        # Set autocommit to False to match SQLite behavior
+        conn.autocommit = False
+        return DBWrapper(conn, is_postgres=True)
+    else:
+        import sqlite3
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return DBWrapper(conn, is_postgres=False)
+
+
+def _adapt_sql_for_db(sql):
+    """Adapt SQL statement for the current database type"""
+    if USE_POSTGRES:
+        # Convert datetime('now') to CURRENT_TIMESTAMP
+        # Replace the longer pattern first to avoid partial replacements
+        sql = sql.replace("DEFAULT (datetime('now'))", "DEFAULT CURRENT_TIMESTAMP")
+        sql = sql.replace("datetime('now')", "CURRENT_TIMESTAMP")
+        
+        # Convert INTEGER PRIMARY KEY AUTOINCREMENT to SERIAL PRIMARY KEY
+        sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        
+        # Convert TEXT to VARCHAR for timestamp columns (optional, TEXT works in PostgreSQL)
+        # Keep TEXT as is since PostgreSQL supports it
+        
+        return sql
+    else:
+        return sql
 
 def init_db():
     conn = get_db(); c = conn.cursor()
@@ -287,7 +440,7 @@ def init_db():
         created_at TEXT DEFAULT (datetime('now')))""",
     ]
     for sql in tables:
-        c.execute(sql)
+        c.execute(_adapt_sql_for_db(sql))
     
     # Create indexes for better performance and data integrity
     indexes = [
@@ -298,7 +451,7 @@ def init_db():
     ]
     for idx_sql in indexes:
         try:
-            c.execute(idx_sql)
+            c.execute(_adapt_sql_for_db(idx_sql))
         except Exception:
             pass  # Index might already exist
     
@@ -378,9 +531,10 @@ def seed_data():
         ("M5","行政",5,"行政总监","Admin Dir","Verwaltungsdirektor",30.0,"全公司","全部",'["体系建设","治理支持","重大项目"]',"",'[]',5,20),
     ]
     for g in grades_data:
-        c.execute("""INSERT OR IGNORE INTO grade_levels(code,series,level,title_zh,title_en,title_de,
+        c.execute("""INSERT INTO grade_levels(code,series,level,title_zh,title_en,title_de,
             base_salary,manage_scope,headcount_range,eval_criteria,promotion_path,perf_dimensions,
-            adjust_pct_min,adjust_pct_max) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", g)
+            adjust_pct_min,adjust_pct_max) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(code) DO NOTHING""", g)
 
     # ── Leave Types ──
     for lt in [
@@ -391,7 +545,7 @@ def seed_data():
         ("marriage","婚假","Marriage","Hochzeitsurlaub",1,3,1,"结婚证明",3,14,""),
         ("bereavement","丧假","Bereavement","Trauerurlaub",1,3,0,"",3,1,"直系亲属"),
     ]:
-        c.execute("INSERT OR IGNORE INTO leave_types VALUES(?,?,?,?,?,?,?,?,?,?,?)", lt)
+        c.execute("INSERT INTO leave_types VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING", lt)
 
     # ── Quotation Templates ──
     for q in [
@@ -415,9 +569,10 @@ def seed_data():
          1.5,2.5,4.0,'[]',4,"2026-01-01","2026-12-31",
          '[{"g":"P4","min":-2,"max":2},{"g":"P7","min":-5,"max":5},{"g":"P9","min":-8,"max":8}]'),
     ]:
-        c.execute("""INSERT OR IGNORE INTO quotation_templates(id,biz_type,service_type,name,description,
+        c.execute("""INSERT INTO quotation_templates(id,biz_type,service_type,name,description,
             base_price,unit,volume_tiers,night_surcharge,weekend_surcharge,holiday_surcharge,
-            skill_surcharge,min_hours,valid_from,valid_to,adjust_rules) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", q)
+            skill_surcharge,min_hours,valid_from,valid_to,adjust_rules) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO NOTHING""", q)
 
     # ── Users ──
     for u in [
@@ -457,8 +612,9 @@ def seed_data():
     }
     for role,(v,cr,ed,dl,ex,ap) in role_perm.items():
         for mod in ALL_M:
-            c.execute("""INSERT OR IGNORE INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,hidden_fields)
-                VALUES(?,?,?,?,?,?,?,?,?)""",
+            c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,hidden_fields)
+                VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(role, module) DO NOTHING""",
                 (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),""))
 
     # ── Warehouses ──
@@ -499,10 +655,11 @@ def seed_data():
         ("WSC-EMR-P4-管理","EMR","P4","管理",15.5,0,0,0,25,50,100,130,180,110,'[]',"按小时","2026-01-01","2026-12-31",""),
     ]
     for wsc in wh_salary_configs:
-        c.execute("""INSERT OR IGNORE INTO warehouse_salary_config(id,warehouse_code,grade,position_type,
+        c.execute("""INSERT INTO warehouse_salary_config(id,warehouse_code,grade,position_type,
             hourly_rate,container_rate_20gp,container_rate_40gp,container_rate_45hc,
             night_bonus_pct,weekend_bonus_pct,holiday_bonus_pct,perf_base,perf_excellent_bonus,perf_good_bonus,
-            special_skill_bonus,settle_method,effective_from,effective_to,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", wsc)
+            special_skill_bonus,settle_method,effective_from,effective_to,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO NOTHING""", wsc)
 
     # ── Suppliers ──
     for s in [("SUP-001","德信人力","人力供应商","渊博","CT-2025-001","2025-01-01","2026-12-31","月结","EUR","陈刚","+49-176-2001","chen@dexin.de","Köln","供应商自行报税","合作中","A",""),
@@ -532,7 +689,7 @@ def seed_data():
     for e in emps:
         for lt,total in [("annual",20),("sick",30),("personal",5)]:
             used = random.randint(0,3) if lt!="sick" else random.randint(0,2)
-            c.execute("INSERT OR IGNORE INTO leave_balances VALUES(?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO leave_balances VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
                 (f"LB-{e[0]}-2026-{lt}",e[0],2026,lt,total,used,0,total-used))
 
     # ── Sample data ──
