@@ -1,5 +1,6 @@
 """渊博+579 HR V6 — FastAPI Backend (Enhanced with Account Management & Warehouse Salary)"""
 import os, json, uuid, shutil, secrets, string, traceback, threading, logging, sys, copy
+from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
@@ -10,7 +11,41 @@ from typing import Optional
 import database
 import re
 
-app = FastAPI(title="渊博579 HR V6")
+UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(STATIC_DIR, exist_ok=True)
+
+_db_ready = False
+
+DB_INIT_MAX_RETRIES = int(os.environ.get("DB_INIT_MAX_RETRIES", 5))
+DB_INIT_RETRY_DELAY = int(os.environ.get("DB_INIT_RETRY_DELAY", 3))
+
+def _init_database():
+    import time as _time
+    global _db_ready
+    for attempt in range(1, DB_INIT_MAX_RETRIES + 1):
+        try:
+            database.init_db()
+            database.seed_data()
+            database.ensure_demo_users()
+            _db_ready = True
+            print("✅ Database initialized successfully")
+            return
+        except Exception as e:
+            print(f"⚠️ Database initialization error (attempt {attempt}/{DB_INIT_MAX_RETRIES}): {e}")
+            if attempt < DB_INIT_MAX_RETRIES:
+                _time.sleep(DB_INIT_RETRY_DELAY)
+            else:
+                traceback.print_exc()
+
+@asynccontextmanager
+async def lifespan(app):
+    threading.Thread(target=_init_database, daemon=True).start()
+    yield
+    logging.getLogger("uvicorn.error").info("Application shutting down gracefully")
+
+app = FastAPI(title="渊博579 HR V6", lifespan=lifespan)
 # CORS: Restrict to specific origins in production. Use "*" only for development.
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -20,33 +55,6 @@ app.add_middleware(
     allow_methods=["*"], 
     allow_headers=["*"]
 )
-
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(STATIC_DIR, exist_ok=True)
-
-_db_ready = False
-
-@app.on_event("startup")
-def on_startup():
-    def _init_database():
-        global _db_ready
-        try:
-            database.init_db()
-            database.seed_data()
-            database.ensure_demo_users()
-            _db_ready = True
-            print("✅ Database initialized successfully")
-        except Exception as e:
-            print(f"⚠️ Database initialization error: {e}")
-            traceback.print_exc()
-
-    threading.Thread(target=_init_database, daemon=True).start()
-
-@app.on_event("shutdown")
-def on_shutdown():
-    logging.getLogger("uvicorn.error").info("Application shutting down gracefully")
 
 import hashlib, time, hmac, base64
 
