@@ -140,6 +140,14 @@ tr:hover td{background:rgba(79,110,247,.05)}
 (() => {
   const fallback = document.getElementById('login-fallback');
   if(!fallback) return;
+  // If the user is already logged in, hide fallback immediately so it does not block the system page
+  try {
+    const savedToken = localStorage.getItem('hr_token');
+    const savedUser = JSON.parse(localStorage.getItem('hr_user'));
+    if(savedToken && savedUser && savedUser.username) {
+      fallback.style.display = 'none';
+    }
+  } catch(e) { /* ignore localStorage / JSON parse errors */ }
   const langs = [
     {c:'zh',n:'中文',u:'用户名',p:'密码',l:'登录',h:'用户名密码需要联系管理员赋予。若页面长时间只显示此界面，请检查网络/CDN加载。',phu:'请输入用户名',php:'请输入密码'},
     {c:'en',n:'English',u:'Username',p:'Password',l:'Login',h:'Contact administrator for account credentials. If only this page appears, check CDN/network loading.',phu:'Enter username',php:'Enter password'},
