@@ -1057,7 +1057,9 @@ const QuotePage=({t})=>{
       const resp=await fetch('/api/quotation-pdf',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({ids:selIds})});
       if(!resp.ok){const err=await resp.json().catch(()=>({}));showToast(err.detail||'生成PDF失败');return;}
       const blob=await resp.blob();
-      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='quotation_'+new Date().toISOString().slice(0,10)+'.pdf';a.click();
+      const cd=resp.headers.get('content-disposition')||'';const fnMatch=cd.match(/filename="?([^"]+)"?/);
+      const fn=fnMatch?fnMatch[1]:'quotation_'+new Date().toISOString().slice(0,10)+'.pdf';
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fn;a.click();
       URL.revokeObjectURL(a.href);showToast('PDF生成成功');
     }catch(e){showToast('生成PDF失败');}finally{setPdfLoading(false);}
   };
