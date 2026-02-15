@@ -176,7 +176,9 @@ CREATE TABLE IF NOT EXISTS warehouses (
     rate_20gp REAL DEFAULT 150, rate_40gp REAL DEFAULT 280, rate_45hc REAL DEFAULT 330,
     unload_20gp REAL DEFAULT 150, unload_40gp REAL DEFAULT 280, unload_45hc REAL DEFAULT 330,
     emp_cols TEXT, ts_cols TEXT, export_freq TEXT DEFAULT 'Monthly', export_lang TEXT DEFAULT 'zh',
-    created_at TEXT DEFAULT (datetime('now')));
+    created_at TEXT DEFAULT (datetime('now')),
+    tax_number TEXT, contact_person TEXT, cooperation_mode TEXT DEFAULT '自营',
+    contact_email TEXT, contact_phone_2 TEXT, updated_at TEXT DEFAULT (datetime('now')));
 
 -- ── NEW: Warehouse Salary Config - 仓库薪资配置表 ──
 CREATE TABLE IF NOT EXISTS warehouse_salary_config (
@@ -311,6 +313,24 @@ CREATE TABLE IF NOT EXISTS dispatch_transfers (
     transfer_type TEXT DEFAULT '临时支援', biz_line TEXT,
     approver TEXT, reason TEXT, status TEXT DEFAULT '待审批', notes TEXT,
     created_at TEXT DEFAULT (datetime('now')));
+
+-- ── Enterprise Documents - 企业文献库 ──
+CREATE TABLE IF NOT EXISTS enterprise_documents (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT '通用',
+    file_name TEXT,
+    file_url TEXT,
+    file_type TEXT,
+    file_size INTEGER DEFAULT 0,
+    description TEXT,
+    tags TEXT,
+    warehouse_code TEXT,
+    uploaded_by TEXT,
+    send_to TEXT,
+    status TEXT DEFAULT '已发布',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')));
 
 -- ============================================================================
 -- Indexes for Better Performance and Data Integrity

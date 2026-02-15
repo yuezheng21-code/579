@@ -143,7 +143,7 @@ ALLOWED_TABLES = {
     "grade_levels", "grade_evaluations", "promotion_applications",
     "bonus_applications", "quotation_templates", "quotation_records",
     "employee_files", "leave_types", "talent_pool", "recruit_progress",
-    "schedules", "messages", "permission_overrides"
+    "schedules", "messages", "permission_overrides", "enterprise_documents"
 }
 
 # Table-specific allowed order columns for validation
@@ -177,6 +177,7 @@ TABLE_ORDER_COLUMNS = {
     "schedules": ["id", "created_at", "work_date"],
     "messages": ["id", "created_at", "timestamp"],
     "permission_overrides": ["id", "role", "module"],
+    "enterprise_documents": ["id", "created_at", "updated_at", "category", "title"],
 }
 
 def _validate_table_name(table: str):
@@ -658,6 +659,76 @@ async def create_supplier(request: Request, user=Depends(get_user)):
 # ── Warehouses ──
 @app.get("/api/warehouses")
 def get_warehouses(user=Depends(get_user)): return q("warehouses", order="code ASC")
+
+@app.post("/api/warehouses")
+async def create_warehouse(request: Request, user=Depends(get_user)):
+    data = await request.json()
+    if not data.get("code") or not data.get("name"):
+        raise HTTPException(400, "仓库编码和名称不能为空")
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    try:
+        insert("warehouses", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建仓库失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "warehouses", data["code"], f"创建仓库: {data.get('name','')}")
+    return {"ok": True, "code": data["code"]}
+
+@app.put("/api/warehouses/{code}")
+async def update_warehouse(code: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    data.pop("code", None)
+    data["updated_at"] = datetime.now().isoformat()
+    try:
+        update("warehouses", "code", code, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新仓库失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "warehouses", code, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+# ── Enterprise Documents ──
+@app.get("/api/enterprise-docs")
+def get_enterprise_docs(category: Optional[str] = None, warehouse_code: Optional[str] = None, user=Depends(get_user)):
+    conditions = []
+    params = []
+    if category:
+        conditions.append("category=?")
+        params.append(category)
+    if warehouse_code:
+        conditions.append("(warehouse_code=? OR warehouse_code IS NULL OR warehouse_code='')")
+        params.append(warehouse_code)
+    where = " AND ".join(conditions) if conditions else "1=1"
+    return q("enterprise_documents", where, tuple(params), order="created_at DESC")
+
+@app.post("/api/enterprise-docs")
+async def create_enterprise_doc(request: Request, user=Depends(get_user)):
+    data = await request.json()
+    if not data.get("title"):
+        raise HTTPException(400, "文档标题不能为空")
+    data["id"] = f"ED-{uuid.uuid4().hex[:10]}"
+    data.setdefault("category", "通用")
+    data.setdefault("status", "已发布")
+    data.setdefault("uploaded_by", user.get("display_name", ""))
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    try:
+        insert("enterprise_documents", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建企业文档失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "enterprise_documents", data["id"], f"文档: {data.get('title','')}")
+    return {"ok": True, "id": data["id"]}
+
+@app.put("/api/enterprise-docs/{doc_id}")
+async def update_enterprise_doc(doc_id: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    data.pop("id", None)
+    data["updated_at"] = datetime.now().isoformat()
+    try:
+        update("enterprise_documents", "id", doc_id, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新企业文档失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "enterprise_documents", doc_id, json.dumps(list(data.keys())))
+    return {"ok": True}
 
 # ── Timesheet ──
 @app.get("/api/timesheet")
