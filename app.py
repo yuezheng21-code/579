@@ -239,7 +239,7 @@ def q(table, where="1=1", params=(), order="id DESC", limit=500):
     # Ensure limit is an integer
     try:
         limit = int(limit)
-        if limit <= 0 or limit > 1000:
+        if limit <= 0 or limit > 5000:
             limit = 500
     except (ValueError, TypeError):
         limit = 500
@@ -413,11 +413,7 @@ async def create_employee(request: Request, user=Depends(get_user)):
     result = {"ok": True, "id": data["id"]}
     # Optionally create a system account for the new employee
     if create_account:
-        VALID_ROLES = {"admin", "ceo", "mgr", "hr", "fin", "wh", "sup", "worker",
-                       "ops_director", "regional_mgr", "site_mgr", "deputy_mgr",
-                       "shift_leader", "team_leader", "fin_director", "fin_assistant",
-                       "fin_specialist", "hr_manager", "hr_assistant", "hr_specialist",
-                       "admin_assistant", "admin_specialist"}
+        VALID_ROLES = set(ROLE_HIERARCHY.keys())
         if account_role not in VALID_ROLES:
             account_role = "worker"
         employee_id = data["id"]
@@ -1876,6 +1872,29 @@ ROLE_HIERARCHY = {
     "worker": 10,  # Worker
 }
 
+# Role sets for access control — derived from organizational hierarchy
+# Roles with full data access (bypasses grade-based scope)
+FULL_ACCESS_ROLES = frozenset({
+    "admin", "ceo", "ops_director", "hr", "hr_manager", "hr_assistant", "hr_specialist",
+    "fin", "fin_director", "fin_assistant", "fin_specialist",
+    "admin_assistant", "admin_specialist"
+})
+# Roles that can submit dispatch (personnel) requests directly
+DISPATCH_REQUEST_ROLES = frozenset({
+    "admin", "ceo", "hr", "mgr", "ops_director", "regional_mgr", "site_mgr",
+    "deputy_mgr", "shift_leader", "hr_manager"
+})
+# Roles that can submit transfer (调仓) requests
+TRANSFER_REQUEST_ROLES = frozenset({
+    "admin", "ceo", "hr", "ops_director", "hr_manager", "site_mgr"
+})
+# Roles that can view all dispatch transfers
+TRANSFER_VIEW_ALL_ROLES = frozenset({
+    "admin", "ceo", "hr", "ops_director", "hr_manager", "hr_assistant", "hr_specialist"
+})
+# Roles that can manage regions
+REGION_MANAGE_ROLES = frozenset({"admin", "ceo", "mgr", "ops_director"})
+
 # Grade-based permission levels for operational staff (P-series)
 # P0-P2: self_only — can only see own data, schedules, and timesheets
 # P3: self_only + own warehouse schedules/timesheets (read)
@@ -1946,9 +1965,7 @@ def _check_grade_data_scope(user: dict) -> str:
     always returns 'all' (bypasses grade check).
     For operational roles, uses grade-based scope if employee_id is linked."""
     role = user.get("role", "worker")
-    if role in ("admin", "ceo", "ops_director", "hr", "hr_manager", "hr_assistant", "hr_specialist",
-                "fin", "fin_director", "fin_assistant", "fin_specialist",
-                "admin_assistant", "admin_specialist"):
+    if role in FULL_ACCESS_ROLES:
         return "all"
     if role == "regional_mgr":
         return "regional"
@@ -1962,9 +1979,6 @@ def _check_grade_data_scope(user: dict) -> str:
         return "own_supplier"
     grade = _get_employee_grade(user)
     if not grade:
-        # No employee linked, fall back to role-based scope
-        if role == "mgr":
-            return "all"
         return "self_only"
     gp = _get_grade_permissions(grade)
     return gp["data_scope"]
@@ -2086,7 +2100,7 @@ def get_regions(user=Depends(get_user)):
 @app.post("/api/regions")
 async def create_region(request: Request, user=Depends(get_user)):
     """Create a new region. Admin/CEO/MGR/Ops Director only."""
-    if user.get("role") not in ("admin", "ceo", "mgr", "ops_director"):
+    if user.get("role") not in REGION_MANAGE_ROLES:
         raise HTTPException(403, "无权创建大区 / No permission to create region")
     data = await request.json()
     if not data.get("code") or not data.get("name"):
@@ -2115,7 +2129,7 @@ async def create_region(request: Request, user=Depends(get_user)):
 @app.put("/api/regions/{code}")
 async def update_region(code: str, request: Request, user=Depends(get_user)):
     """Update a region. Admin/CEO/MGR/Ops Director only."""
-    if user.get("role") not in ("admin", "ceo", "mgr", "ops_director"):
+    if user.get("role") not in REGION_MANAGE_ROLES:
         raise HTTPException(403, "无权修改大区 / No permission to update region")
     data = await request.json()
     data.pop("code", None)
@@ -2801,10 +2815,9 @@ async def create_dispatch(request: Request, user=Depends(get_user)):
     data = await request.json()
     if not data.get("warehouse_code"):
         raise HTTPException(400, "仓库编码不能为空")
-    # Grade-based check: P5+ can submit personnel requests, or admin/ceo/hr/mgr/ops_director/regional_mgr/site_mgr roles
+    # Grade-based check: P5+ can submit personnel requests, or roles in DISPATCH_REQUEST_ROLES
     role = user.get("role", "worker")
-    if role not in ("admin", "ceo", "hr", "mgr", "ops_director", "regional_mgr", "site_mgr",
-                    "deputy_mgr", "shift_leader", "hr_manager"):
+    if role not in DISPATCH_REQUEST_ROLES:
         grade = _get_employee_grade(user)
         gp = _get_grade_permissions(grade)
         if not gp["can_dispatch_request"]:
@@ -2858,7 +2871,7 @@ async def update_schedule(sid: str, request: Request, user=Depends(get_user)):
 def get_dispatch_transfers(user=Depends(get_user)):
     """获取人员调仓记录列表"""
     role = user.get("role", "worker")
-    if role in ("admin", "ceo", "hr", "ops_director", "hr_manager", "hr_assistant", "hr_specialist"):
+    if role in TRANSFER_VIEW_ALL_ROLES:
         return q("dispatch_transfers", order="created_at DESC")
     # Grade-based scoping
     if user.get("employee_id"):
@@ -2882,8 +2895,8 @@ def get_dispatch_transfers(user=Depends(get_user)):
 async def create_dispatch_transfer(request: Request, user=Depends(get_user)):
     """创建人员调仓申请 - P7及以上或admin/ceo/hr/ops_director/site_mgr可发起"""
     role = user.get("role", "worker")
-    # Grade-based check: P7+ can submit transfer requests, or admin/ceo/hr/ops_director/site_mgr
-    if role not in ("admin", "ceo", "hr", "ops_director", "hr_manager", "site_mgr"):
+    # Grade-based check: P7+ can submit transfer requests, or roles in TRANSFER_REQUEST_ROLES
+    if role not in TRANSFER_REQUEST_ROLES:
         grade = _get_employee_grade(user)
         gp = _get_grade_permissions(grade)
         if not gp["can_transfer_request"]:

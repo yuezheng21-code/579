@@ -1238,7 +1238,7 @@ async def test_admin_check_edit_permission_per_module(auth_headers):
 
 @pytest.mark.asyncio
 async def test_all_modules_have_permissions_seeded():
-    """All 28 modules should have permission_overrides for every role (including new position-based roles)."""
+    """All modules should have permission_overrides for every role (including new position-based roles)."""
     ALL_MODULES = [
         "dashboard", "employees", "suppliers", "talent", "dispatch", "recruit",
         "timesheet", "settlement", "warehouse", "schedule", "templates",
@@ -1246,13 +1246,8 @@ async def test_all_modules_have_permissions_seeded():
         "grades", "quotation", "files", "leave", "expense", "performance",
         "mypage", "accounts", "whsalary", "safety", "regions"
     ]
-    ALL_ROLES = [
-        "admin", "ceo", "hr", "wh", "fin", "sup", "mgr", "worker",
-        "ops_director", "regional_mgr", "site_mgr", "deputy_mgr",
-        "shift_leader", "team_leader", "fin_director", "fin_assistant",
-        "fin_specialist", "hr_manager", "hr_assistant", "hr_specialist",
-        "admin_assistant", "admin_specialist"
-    ]
+    from app import ROLE_HIERARCHY
+    ALL_ROLES = list(ROLE_HIERARCHY.keys())
     db = database.get_db()
     for role in ALL_ROLES:
         for mod in ALL_MODULES:
