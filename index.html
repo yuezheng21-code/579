@@ -1393,7 +1393,7 @@ const ContainerPage=({t})=>{
           React.createElement('td',null,r.id),React.createElement('td',{style:{fontWeight:700}},r.container_no||'-'),
           React.createElement('td',null,r.work_date||'-'),React.createElement('td',null,r.warehouse_code||'-'),
           React.createElement('td',null,r.container_type||'40GP'),React.createElement('td',null,r.load_type||'卸柜'),
-          React.createElement('td',null,r.dock_no||'-'),React.createElement('td',null,r.ratio||0),
+          React.createElement('td',null,r.dock_no||'-'),React.createElement('td',null,r.ratio!=null&&r.ratio!==0?r.ratio:'-'),
           React.createElement('td',null,r.team_no||'-'),React.createElement('td',null,r.team_size||0),
           React.createElement('td',null,r.duration_minutes||0),
           React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status||'待审核'})),

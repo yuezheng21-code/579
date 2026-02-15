@@ -1802,7 +1802,7 @@ def export_table(table: str, fmt: str = "json", user=Depends(get_user)):
                         headers={"Content-Disposition": f'attachment; filename="{table}.xls"'})
 
     if fmt == "pdf":
-        # Generate a simple text-based PDF-like report
+        # Generate a tab-separated text report
         import io
         lines = []
         header = [labels.get(f, f) for f in fields]
@@ -1813,8 +1813,8 @@ def export_table(table: str, fmt: str = "json", user=Depends(get_user)):
         content = "\n".join(lines)
         from fastapi.responses import Response
         return Response(content=content.encode("utf-8"),
-                        media_type="application/pdf",
-                        headers={"Content-Disposition": f'attachment; filename="{table}.pdf"'})
+                        media_type="text/plain",
+                        headers={"Content-Disposition": f'attachment; filename="{table}_report.txt"'})
 
     return {"table": table, "fields": fields, "count": len(export_data), "data": export_data}
 

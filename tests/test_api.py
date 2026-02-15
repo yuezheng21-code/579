@@ -1865,12 +1865,12 @@ async def test_export_excel_format(auth_headers):
 
 @pytest.mark.asyncio
 async def test_export_pdf_format(auth_headers):
-    """Test exporting employees as PDF."""
+    """Test exporting employees as text report (PDF replacement)."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.get("/api/export/employees?fmt=pdf", headers=auth_headers)
     assert r.status_code == 200
-    assert "pdf" in r.headers.get("content-type", "")
+    assert "text/plain" in r.headers.get("content-type", "")
 
 
 @pytest.mark.asyncio
