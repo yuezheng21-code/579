@@ -608,6 +608,17 @@ def init_db():
         description TEXT,
         updated_by TEXT,
         updated_at TEXT DEFAULT (datetime('now')))""",
+    # ── Regions - 大区管理 ──
+    """CREATE TABLE IF NOT EXISTS regions (
+        code TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        manager_id TEXT,
+        manager_name TEXT,
+        description TEXT DEFAULT '',
+        warehouse_codes TEXT DEFAULT '',
+        status TEXT DEFAULT '启用',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')))""",
     ]
     for sql in tables:
         c.execute(_adapt_sql_for_db(sql))
@@ -768,19 +779,19 @@ def seed_data():
              "timesheet","settlement","warehouse","schedule","templates",
              "clock","container","messages","analytics","admin","logs",
              "grades","quotation","files","leave","expense","performance",
-             "mypage","accounts","whsalary","safety"]
+             "mypage","accounts","whsalary","safety","regions"]
     # role_perm: (can_view, can_create, can_edit, can_delete, can_export, can_approve, can_import)
     role_perm = {
         "admin": (ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M),
         "ceo": (ALL_M,
-                ["employees","suppliers","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","timesheet","safety"],
-                ["employees","suppliers","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","leave","expense","safety"],
-                ["employees","suppliers","talent","dispatch","recruit"],
+                ["employees","suppliers","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","timesheet","safety","regions"],
+                ["employees","suppliers","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","leave","expense","safety","regions"],
+                ["employees","suppliers","talent","dispatch","recruit","regions"],
                 ALL_M,
                 ALL_M,
                 ["employees","suppliers","timesheet","talent","dispatch","performance"]),
         "hr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
-                "schedule","templates","messages","analytics","grades","files","leave","expense","performance","accounts","whsalary","safety"],
+                "schedule","templates","messages","analytics","grades","files","leave","expense","performance","accounts","whsalary","safety","regions"],
                ["employees","suppliers","talent","dispatch","recruit","schedule","files","leave","expense","grades","performance","accounts","whsalary","safety"],
                ["employees","suppliers","talent","dispatch","recruit","schedule","timesheet","grades","leave","performance","accounts","whsalary","safety"],
                [],
@@ -795,9 +806,9 @@ def seed_data():
                 ["leave"],["leave"],[],["employees","timesheet"],[],[]),
         "mgr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                  "warehouse","schedule","templates","clock","container","messages","analytics",
-                 "grades","quotation","files","leave","expense","performance","accounts","whsalary","safety"],
-                ["employees","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","safety"],
-                ["employees","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","safety"],
+                 "grades","quotation","files","leave","expense","performance","accounts","whsalary","safety","regions"],
+                ["employees","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","safety","regions"],
+                ["employees","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","safety","regions"],
                 [],
                 ["employees","timesheet","performance","safety"],
                 ["leave","quotation","safety"],
@@ -848,6 +859,15 @@ def seed_data():
               ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,"鲁尔东",""),
               ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"南战区","")]:
         c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*len(w))+")", w)
+
+    # ── Regions - 大区管理 ──
+    for reg in [
+        ("REG-RUHRW", "鲁尔西", "YB-008", "周强", "鲁尔区西部, 包括Köln/Düsseldorf区域仓库", "UNA,DHL", "启用"),
+        ("REG-RUHRE", "鲁尔东", "YB-009", "吴亮", "鲁尔区东部, 包括Duisburg/Essen区域仓库", "W579,CMA", "启用"),
+        ("REG-SOUTH", "南战区", "YB-010", "郑鹏", "南部战区, 包括Emmerich等区域仓库", "EMR", "启用"),
+    ]:
+        c.execute("""INSERT INTO regions(code,name,manager_id,manager_name,description,warehouse_codes,status)
+            VALUES(?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING""", reg)
 
     # ── NEW: Warehouse Salary Config ──
     wh_salary_configs = [

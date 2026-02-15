@@ -434,6 +434,18 @@ CREATE TABLE IF NOT EXISTS id_naming_rules (
     updated_by TEXT,
     updated_at TEXT DEFAULT (datetime('now')));
 
+-- ── Regions - 大区管理 ──
+CREATE TABLE IF NOT EXISTS regions (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    manager_id TEXT,
+    manager_name TEXT,
+    description TEXT DEFAULT '',
+    warehouse_codes TEXT DEFAULT '',
+    status TEXT DEFAULT '启用',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')));
+
 -- ============================================================================
 -- Indexes for Better Performance and Data Integrity
 -- ============================================================================

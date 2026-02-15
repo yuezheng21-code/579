@@ -161,7 +161,7 @@ ALLOWED_TABLES = {
     "employee_files", "leave_types", "talent_pool", "recruit_progress",
     "schedules", "messages", "permission_overrides", "enterprise_documents",
     "safety_incidents", "id_naming_rules", "payslips", "payroll_confirmations",
-    "dispatch_transfers"
+    "dispatch_transfers", "regions"
 }
 
 # Table-specific allowed order columns for validation
@@ -201,6 +201,7 @@ TABLE_ORDER_COLUMNS = {
     "payslips": ["id", "created_at", "month", "employee_id"],
     "payroll_confirmations": ["id", "created_at", "month"],
     "dispatch_transfers": ["id", "created_at", "dispatch_date"],
+    "regions": ["code", "name", "created_at", "updated_at"],
 }
 
 def _validate_table_name(table: str):
@@ -1983,17 +1984,142 @@ def get_grade_permissions(user=Depends(get_user)):
 
 @app.get("/api/regions")
 def get_regions(user=Depends(get_user)):
-    """Get all warehouse regions with their warehouses."""
+    """Get all regions with their warehouses and managers."""
     db = database.get_db()
-    rows = db.execute("SELECT code, name, region FROM warehouses WHERE region IS NOT NULL AND region != '' ORDER BY region, code").fetchall()
-    db.close()
-    regions = {}
-    for r in rows:
-        region = r["region"]
-        if region not in regions:
-            regions[region] = {"name": region, "warehouses": []}
-        regions[region]["warehouses"].append({"code": r["code"], "name": r["name"]})
-    return list(regions.values())
+    try:
+        regions = db.execute("SELECT * FROM regions ORDER BY code").fetchall()
+        regions = [dict(r) for r in regions]
+        # Enrich each region with actual warehouse details
+        for reg in regions:
+            wh_codes = [c.strip() for c in (reg.get("warehouse_codes") or "").split(",") if c.strip()]
+            wh_list = []
+            for wc in wh_codes:
+                wh = db.execute("SELECT code, name, address, manager, current_headcount FROM warehouses WHERE code=?", (wc,)).fetchone()
+                if wh:
+                    wh_list.append(dict(wh))
+            reg["warehouses"] = wh_list
+        return regions
+    finally:
+        db.close()
+
+@app.post("/api/regions")
+async def create_region(request: Request, user=Depends(get_user)):
+    """Create a new region. Admin/CEO/MGR only."""
+    if user.get("role") not in ("admin", "ceo", "mgr"):
+        raise HTTPException(403, "无权创建大区 / No permission to create region")
+    data = await request.json()
+    if not data.get("code") or not data.get("name"):
+        raise HTTPException(400, "大区编码和名称不能为空 / Region code and name required")
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    data.setdefault("status", "启用")
+    try:
+        insert("regions", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建大区失败: {str(e)}")
+    # Update warehouse region fields
+    wh_codes = [c.strip() for c in (data.get("warehouse_codes") or "").split(",") if c.strip()]
+    if wh_codes:
+        db = database.get_db()
+        try:
+            for wc in wh_codes:
+                db.execute("UPDATE warehouses SET region=?, updated_at=? WHERE code=?",
+                           (data["name"], datetime.now().isoformat(), wc))
+            db.commit()
+        finally:
+            db.close()
+    audit_log(user.get("username", ""), "create", "regions", data["code"], f"创建大区: {data.get('name','')}")
+    return {"ok": True, "code": data["code"]}
+
+@app.put("/api/regions/{code}")
+async def update_region(code: str, request: Request, user=Depends(get_user)):
+    """Update a region. Admin/CEO/MGR only."""
+    if user.get("role") not in ("admin", "ceo", "mgr"):
+        raise HTTPException(403, "无权修改大区 / No permission to update region")
+    data = await request.json()
+    data.pop("code", None)
+    data["updated_at"] = datetime.now().isoformat()
+    # Get old region to clear warehouse region fields
+    db = database.get_db()
+    try:
+        old = db.execute("SELECT * FROM regions WHERE code=?", (code,)).fetchone()
+        if not old:
+            raise HTTPException(404, "大区不存在 / Region not found")
+        old_wh_codes = [c.strip() for c in (old["warehouse_codes"] or "").split(",") if c.strip()]
+        # Clear old warehouse region fields
+        for wc in old_wh_codes:
+            db.execute("UPDATE warehouses SET region='', updated_at=? WHERE code=?",
+                       (datetime.now().isoformat(), wc))
+        # Update region record
+        sets = ",".join(f"{k}=?" for k in data.keys())
+        db.execute(f"UPDATE regions SET {sets} WHERE code=?", list(data.values()) + [code])
+        # Set new warehouse region fields only if warehouse_codes was provided or unchanged
+        if "warehouse_codes" in data:
+            new_wh_codes = [c.strip() for c in (data["warehouse_codes"] or "").split(",") if c.strip()]
+        else:
+            new_wh_codes = old_wh_codes
+        region_name = data.get("name", old["name"])
+        for wc in new_wh_codes:
+            db.execute("UPDATE warehouses SET region=?, updated_at=? WHERE code=?",
+                       (region_name, datetime.now().isoformat(), wc))
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"更新大区失败: {str(e)}")
+    finally:
+        db.close()
+    audit_log(user.get("username", ""), "update", "regions", code, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+@app.delete("/api/regions/{code}")
+def delete_region(code: str, user=Depends(get_user)):
+    """Delete a region. Admin only."""
+    if user.get("role") not in ("admin", "ceo"):
+        raise HTTPException(403, "无权删除大区 / No permission to delete region")
+    db = database.get_db()
+    try:
+        old = db.execute("SELECT * FROM regions WHERE code=?", (code,)).fetchone()
+        if not old:
+            raise HTTPException(404, "大区不存在 / Region not found")
+        # Clear warehouse region fields
+        wh_codes = [c.strip() for c in (old["warehouse_codes"] or "").split(",") if c.strip()]
+        for wc in wh_codes:
+            db.execute("UPDATE warehouses SET region='', updated_at=? WHERE code=?",
+                       (datetime.now().isoformat(), wc))
+        db.execute("DELETE FROM regions WHERE code=?", (code,))
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"删除大区失败: {str(e)}")
+    finally:
+        db.close()
+    audit_log(user.get("username", ""), "delete", "regions", code, f"删除大区: {old['name']}")
+    return {"ok": True}
+
+@app.get("/api/regions/permissions")
+def get_region_manager_permissions(user=Depends(get_user)):
+    """Get regional manager (P8) permission details for display."""
+    grade_perms = GRADE_PERMISSIONS.get("P8", {})
+    return {
+        "grade": "P8",
+        "title": "区域经理 / Regional Manager",
+        "data_scope": grade_perms.get("data_scope", "regional"),
+        "salary_scope": grade_perms.get("salary_scope", "regional"),
+        "can_dispatch_request": grade_perms.get("can_dispatch_request", True),
+        "can_transfer_request": grade_perms.get("can_transfer_request", True),
+        "permissions_detail": [
+            {"module": "工时记录", "scope": "可查看和审批所辖大区所有仓库的工时记录"},
+            {"module": "排班管理", "scope": "可查看和管理所辖大区所有仓库的排班"},
+            {"module": "薪资配置", "scope": "可配置和修改所辖大区仓库的薪资标准"},
+            {"module": "派遣需求", "scope": "可提交和审批所辖大区的派遣需求"},
+            {"module": "人员调配", "scope": "可发起和审批所辖大区内的人员调配"},
+            {"module": "安全管理", "scope": "可查看和处理所辖大区的安全事件"},
+            {"module": "报价管理", "scope": "可管理所辖大区客户的报价"},
+        ],
+        "approval_flow": "工时审批流程: 班组长 → 驻仓经理 → 区域经理 → 财务总监",
+    }
 
 @app.post("/api/permissions/update")
 async def update_perm(request: Request, user=Depends(get_user)):
