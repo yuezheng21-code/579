@@ -799,7 +799,7 @@ const TSPage=({t})=>{
   const batchApprove=(type)=>{if(!selIds.length)return showToast('请先选择记录');
     API.post('/api/timesheet/batch-approve',{ids:selIds,type}).then(()=>{showToast('审批成功');setSelIds([]);API.get('/api/timesheet').then(setTs)})};
   const toggleSel=(id)=>setSelIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
-  const toggleAll=()=>{const visible=ts.slice(0,100).map(r=>r.id);setSelIds(selIds.length===visible.length?[]:visible)};
+  const toggleAll=()=>{const visible=ts.slice(0,100).map(r=>r.id);const allSelected=visible.every(id=>selIds.includes(id));setSelIds(allSelected?[]:visible)};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
       React.createElement('button',{className:'btn btn-pri',onClick:()=>{const now=new Date().toISOString().slice(0,10);setShowEdit({_isNew:true,employee_id:'',employee_name:'',work_date:now,warehouse_code:'',start_time:'08:00',end_time:'17:00',hours:8,position:'库内',grade:'P1',settle_method:'按小时',base_rate:12,hourly_pay:96,notes:''});}},'新增工时'),
@@ -1385,8 +1385,7 @@ const PayrollPreviewPage=({t})=>{
             React.createElement('div',{style:{fontSize:13,fontWeight:600}},STEP_LABELS[step]),
             React.createElement('div',{style:{margin:'8px 0'}},React.createElement(SBadge,{s:st})),
             st!=='已审批'&&React.createElement('button',{className:'btn-sm',onClick:()=>approveStep(step)},
-              i<STEPS.length-1?'审批':'最终确认'),
-            i<STEPS.length-1&&React.createElement('span',{style:{position:'absolute',right:-10,fontSize:16}},''))}))),
+              i<STEPS.length-1?'审批':'最终确认'))}))),
     preview&&React.createElement('div',{className:'stats',style:{marginBottom:16}},
       [{n:preview.total_count,l:'总人数',c:'var(--pri)'},
        {n:`€${preview.total_gross?.toFixed(2)}`,l:'总应发',c:'var(--green)'},
