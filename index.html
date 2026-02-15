@@ -304,7 +304,9 @@ const API = {
     if(body) opt.body = JSON.stringify(body);
     const r = await fetch(url,opt);
     if(r.status===401){if(url!=='/api/login'&&url!=='/api/pin-login'){this.setToken('');localStorage.removeItem('hr_user');window.location.reload();return null}}
-    return r.json();
+    const data = await r.json().catch(()=>({}));
+    if(!r.ok){showToast(data.detail||'操作失败 / Operation failed','error');return null;}
+    return data;
   },
   get(u){return this.req('GET',u)}, post(u,b){return this.req('POST',u,b)},
   put(u,b){return this.req('PUT',u,b)}, delete(u){return this.req('DELETE',u)},
@@ -619,11 +621,13 @@ const WHSalaryPage=({t})=>{
   },[]);
   const filtered=selWh?configs.filter(c=>c.warehouse_code===selWh):configs;
   const save=async()=>{
+    let r;
     if(showEdit.id){
-      await API.put(`/api/warehouse-salary-config/${showEdit.id}`,showEdit);
+      r=await API.put(`/api/warehouse-salary-config/${showEdit.id}`,showEdit);
     }else{
-      await API.post('/api/warehouse-salary-config',showEdit);
+      r=await API.post('/api/warehouse-salary-config',showEdit);
     }
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);
     API.get('/api/warehouse-salary-config').then(setConfigs);
   };
@@ -710,8 +714,8 @@ const EmpPage=({t})=>{
   useEffect(()=>{API.get('/api/employees').then(setEmps);API.get('/api/warehouses').then(r=>setWhList(r||[]));API.get('/api/suppliers').then(r=>setSupList(r||[]))},[]);
   const filtered=emps.filter(e=>`${e.name}${e.id}${e.grade}${e.primary_wh}${e.warehouse_name||''}${e.department||''}`.includes(q));
   const save=async()=>{
-    if(showEdit._isNew){const d={...showEdit};delete d._isNew;const r=await API.post('/api/employees',d);if(r&&r.account){showToast(`保存成功，账号已生成: ${r.account.username} / ${r.account.password}，角色: ${r.account.role}`);}else{showToast('保存成功');}}
-    else{await API.put(`/api/employees/${showEdit.id}`,showEdit);showToast('保存成功');}
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;const r=await API.post('/api/employees',d);if(!r)return;if(r.account){showToast(`保存成功，账号已生成: ${r.account.username} / ${r.account.password}，角色: ${r.account.role}`);}else{showToast('保存成功');}}
+    else{const r=await API.put(`/api/employees/${showEdit.id}`,showEdit);if(!r)return;showToast('保存成功');}
     setShowEdit(null);API.get('/api/employees').then(setEmps);
   };
   const doExport=async()=>{const r=await API.get('/api/export/employees');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='employees.json';a.click();showToast('导出成功');}};
@@ -908,8 +912,10 @@ const TSPage=({t})=>{
   const[selIds,setSelIds]=useState([]);
   useEffect(()=>{API.get('/api/timesheet').then(setTs);API.get('/api/employees').then(setEmps);API.get('/api/warehouses').then(setWhs);},[]);
   const save=async()=>{
-    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/timesheet',d);}
-    else{await API.put(`/api/timesheet/${showEdit.id}`,showEdit);}
+    let r;
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;r=await API.post('/api/timesheet',d);}
+    else{r=await API.put(`/api/timesheet/${showEdit.id}`,showEdit);}
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);API.get('/api/timesheet').then(setTs);
   };
   const doExport=async()=>{const r=await API.get('/api/export/timesheet');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='timesheet.json';a.click();showToast('导出成功');}};
@@ -1189,12 +1195,14 @@ const WarehousePage=({t})=>{
   const[whs,setWhs]=useState([]);const[showEdit,setShowEdit]=useState(null);
   useEffect(()=>{API.get('/api/warehouses').then(setWhs);},[]);
   const save=async()=>{
+    let r;
     if(showEdit._isNew){
       const d={...showEdit};delete d._isNew;
-      await API.post('/api/warehouses',d);
+      r=await API.post('/api/warehouses',d);
     }else{
-      await API.put(`/api/warehouses/${showEdit.code}`,showEdit);
+      r=await API.put(`/api/warehouses/${showEdit.code}`,showEdit);
     }
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);
     API.get('/api/warehouses').then(setWhs);
   };
@@ -1264,12 +1272,14 @@ const DocsPage=({t})=>{
   const categories=['安全培训','操作SOP','管理制度','通用'];
   const filtered=selCat?docs.filter(d=>d.category===selCat):docs;
   const save=async()=>{
+    let r;
     if(showEdit.id&&!showEdit._isNew){
-      await API.put(`/api/enterprise-docs/${showEdit.id}`,showEdit);
+      r=await API.put(`/api/enterprise-docs/${showEdit.id}`,showEdit);
     }else{
       const d={...showEdit};delete d._isNew;delete d.id;
-      await API.post('/api/enterprise-docs',d);
+      r=await API.post('/api/enterprise-docs',d);
     }
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);
     API.get('/api/enterprise-docs').then(setDocs);
   };
@@ -1348,12 +1358,14 @@ const SuppliersPage=({t,user})=>{
     if(isSupplier)API.get('/api/supplier/worker-activities').then(setActivities);
   },[]);
   const save=async()=>{
+    let r;
     if(showEdit._isNew){
       const d={...showEdit};delete d._isNew;
-      await API.post('/api/suppliers',d);
+      r=await API.post('/api/suppliers',d);
     }else{
-      await API.put(`/api/suppliers/${showEdit.id}`,showEdit);
+      r=await API.put(`/api/suppliers/${showEdit.id}`,showEdit);
     }
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);
     API.get('/api/suppliers').then(setSups);
   };
@@ -1451,8 +1463,10 @@ const ContainerPage=({t})=>{
   const[recs,setRecs]=useState([]);const[showEdit,setShowEdit]=useState(null);const[whs,setWhs]=useState([]);
   useEffect(()=>{API.get('/api/containers').then(setRecs);API.get('/api/warehouses').then(setWhs);},[]);
   const save=async()=>{
-    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/containers',d);}
-    else{await API.put(`/api/containers/${showEdit.id}`,showEdit);}
+    let r;
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;r=await API.post('/api/containers',d);}
+    else{r=await API.put(`/api/containers/${showEdit.id}`,showEdit);}
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);API.get('/api/containers').then(setRecs);
   };
   const handleImport=async(e)=>{
@@ -1540,8 +1554,10 @@ const SchedulePage=({t})=>{
   const[rows,setRows]=useState([]);const[showEdit,setShowEdit]=useState(null);const[whs,setWhs]=useState([]);const[emps,setEmps]=useState([]);
   useEffect(()=>{API.get('/api/schedules').then(setRows);API.get('/api/warehouses').then(setWhs);API.get('/api/employees').then(setEmps);},[]);
   const save=async()=>{
-    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/schedules',d);}
-    else{await API.put(`/api/schedules/${showEdit.id}`,showEdit);}
+    let r;
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;r=await API.post('/api/schedules',d);}
+    else{r=await API.put(`/api/schedules/${showEdit.id}`,showEdit);}
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);API.get('/api/schedules').then(setRows);
   };
   const handleImport=async(e)=>{
@@ -1619,8 +1635,10 @@ const DispatchPage=({t})=>{
   const[rows,setRows]=useState([]);const[showEdit,setShowEdit]=useState(null);const[whs,setWhs]=useState([]);
   useEffect(()=>{API.get('/api/dispatch').then(setRows);API.get('/api/warehouses').then(setWhs);},[]);
   const save=async()=>{
-    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/dispatch',d);}
-    else{await API.put(`/api/dispatch/${showEdit.id}`,showEdit);}
+    let r;
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;r=await API.post('/api/dispatch',d);}
+    else{r=await API.put(`/api/dispatch/${showEdit.id}`,showEdit);}
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);API.get('/api/dispatch').then(setRows);
   };
   const handleImport=async(e)=>{
@@ -1700,8 +1718,10 @@ const RecruitPage=({t})=>{
   const[rows,setRows]=useState([]);const[showEdit,setShowEdit]=useState(null);
   useEffect(()=>{API.get('/api/recruit').then(setRows);},[]);
   const save=async()=>{
-    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/recruit',d);}
-    else{await API.put(`/api/recruit/${showEdit.id}`,showEdit);}
+    let r;
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;r=await API.post('/api/recruit',d);}
+    else{r=await API.put(`/api/recruit/${showEdit.id}`,showEdit);}
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);API.get('/api/recruit').then(setRows);
   };
   const handleImport=async(e)=>{
@@ -2125,12 +2145,14 @@ const RegionPage=({t,user})=>{
   useEffect(load,[]);
   const isAdmin=user&&(user.role==='admin'||user.role==='ceo'||user.role==='mgr');
   const save=async()=>{
+    let r;
     if(showEdit._isNew){
       const d={...showEdit};delete d._isNew;
-      await API.post('/api/regions',d);
+      r=await API.post('/api/regions',d);
     }else{
-      await API.put('/api/regions/'+showEdit.code,showEdit);
+      r=await API.put('/api/regions/'+showEdit.code,showEdit);
     }
+    if(!r)return;
     showToast('保存成功');setShowEdit(null);load();
   };
   const del=async(code)=>{
