@@ -24,17 +24,45 @@ class CursorWrapper:
         self._cursor = cursor
         self._is_postgres = is_postgres
     
+    def _convert_placeholders(self, sql):
+        """Convert ? placeholders to %s for PostgreSQL, avoiding string literals"""
+        if not self._is_postgres or '?' not in sql:
+            return sql
+        
+        # More robust placeholder conversion that avoids string literals
+        result = []
+        in_single_quote = False
+        in_double_quote = False
+        i = 0
+        
+        while i < len(sql):
+            char = sql[i]
+            
+            # Track quote state
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+                result.append(char)
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+                result.append(char)
+            # Convert ? to %s only outside of quotes
+            elif char == '?' and not in_single_quote and not in_double_quote:
+                result.append('%s')
+            else:
+                result.append(char)
+            
+            i += 1
+        
+        return ''.join(result)
+    
     def execute(self, sql, params=()):
         """Execute SQL with automatic placeholder conversion"""
-        if self._is_postgres and '?' in sql:
-            # Convert ? placeholders to %s for PostgreSQL
-            sql = sql.replace('?', '%s')
+        sql = self._convert_placeholders(sql)
         return self._cursor.execute(sql, params)
     
     def executemany(self, sql, params_list):
         """Execute SQL multiple times with automatic placeholder conversion"""
-        if self._is_postgres and '?' in sql:
-            sql = sql.replace('?', '%s')
+        sql = self._convert_placeholders(sql)
         return self._cursor.executemany(sql, params_list)
     
     def fetchone(self):
@@ -74,7 +102,12 @@ class DBWrapper:
     
     def cursor(self):
         """Get a cursor wrapper"""
-        return CursorWrapper(self._conn.cursor(), self._is_postgres)
+        if self._is_postgres:
+            # Use RealDictCursor for PostgreSQL to get dict-like results
+            raw_cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            raw_cursor = self._conn.cursor()
+        return CursorWrapper(raw_cursor, self._is_postgres)
     
     def commit(self):
         return self._conn.commit()
@@ -100,7 +133,7 @@ class DBWrapper:
 def get_db():
     """Get database connection with abstraction layer"""
     if USE_POSTGRES:
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        conn = psycopg2.connect(DATABASE_URL)
         # Set autocommit to False to match SQLite behavior
         conn.autocommit = False
         return DBWrapper(conn, is_postgres=True)

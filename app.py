@@ -120,7 +120,7 @@ ALLOWED_TABLES = {
 # Table-specific allowed order columns for validation
 TABLE_ORDER_COLUMNS = {
     "employees": ["id", "created_at", "updated_at", "name", "grade", "status"],
-    "users": ["created_at", "username"],
+    "users": ["created_at", "username", "id"],
     "timesheet": ["id", "created_at", "updated_at", "work_date", "employee_id"],
     "leave_requests": ["id", "created_at", "start_date", "end_date"],
     "expense_claims": ["id", "created_at", "status"],
