@@ -624,3 +624,402 @@ async def test_dashboard_includes_service_type_dist(auth_headers):
     assert "dispatch_type_dist" in data
     assert len(data["service_type_dist"]) > 0
     assert len(data["dispatch_type_dist"]) > 0
+
+
+# ── CEO Role and Enhanced Permissions Tests ──
+
+@pytest.fixture
+def ceo_token():
+    """Get CEO auth token."""
+    from app import make_token
+    return make_token("ceo_wb", "ceo")
+
+
+@pytest.fixture
+def ceo_headers(ceo_token):
+    """Return headers with CEO token."""
+    return {"Authorization": f"Bearer {ceo_token}"}
+
+
+@pytest.fixture
+def worker_token():
+    """Get worker auth token."""
+    from app import make_token
+    return make_token("worker1", "worker")
+
+
+@pytest.fixture
+def worker_headers(worker_token):
+    """Return headers with worker token."""
+    return {"Authorization": f"Bearer {worker_token}"}
+
+
+@pytest.mark.asyncio
+async def test_ceo_login():
+    """Test CEO accounts (王博 and 袁梁毅) can login."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/login", json={"username": "ceo_wb", "password": "ceo123"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["user"]["role"] == "ceo"
+    assert "王博" in data["user"]["display_name"]
+
+
+@pytest.mark.asyncio
+async def test_ceo_login_yly():
+    """Test CEO 袁梁毅 can login."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/login", json={"username": "ceo_yly", "password": "ceo123"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["user"]["role"] == "ceo"
+    assert "袁梁毅" in data["user"]["display_name"]
+
+
+@pytest.mark.asyncio
+async def test_get_roles(auth_headers):
+    """Test roles endpoint returns hierarchy."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/roles", headers=auth_headers)
+    assert r.status_code == 200
+    roles = r.json()
+    assert len(roles) >= 8
+    role_names = [ro["role"] for ro in roles]
+    assert "admin" in role_names
+    assert "ceo" in role_names
+    # admin level should be highest
+    admin_role = next(ro for ro in roles if ro["role"] == "admin")
+    ceo_role = next(ro for ro in roles if ro["role"] == "ceo")
+    assert admin_role["level"] > ceo_role["level"]
+
+
+@pytest.mark.asyncio
+async def test_admin_god_view_permissions(auth_headers):
+    """Admin has god view - all permissions for every module."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["is_admin"] is True
+    assert data["role_level"] == 100
+    # Admin should have all permissions on all modules
+    for module, perms in data["permissions"].items():
+        assert perms["can_view"] == 1
+        assert perms["can_create"] == 1
+        assert perms["can_edit"] == 1
+        assert perms["can_delete"] == 1
+        assert perms["can_export"] == 1
+        assert perms["can_import"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ceo_permissions(ceo_headers):
+    """CEO has near-full access but is below admin."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=ceo_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["is_ceo"] is True
+    assert data["role_level"] == 90
+    # CEO should be able to view all modules
+    for module, perms in data["permissions"].items():
+        assert perms["can_view"] == 1
+
+
+@pytest.mark.asyncio
+async def test_permission_check_module(auth_headers):
+    """Test check single module permission."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/check?module=employees", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["role"] == "admin"
+    assert data["can_view"] == 1
+    assert data["can_import"] == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_restricted_permissions(worker_headers):
+    """Worker should have limited permissions."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=worker_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["role"] == "worker"
+    assert data["role_level"] == 10
+    # Worker should not have admin module access
+    admin_perm = data["permissions"].get("admin", {})
+    assert admin_perm.get("can_view", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_permissions_include_can_import(auth_headers):
+    """Test that permission_overrides includes can_import field."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions", headers=auth_headers)
+    assert r.status_code == 200
+    perms = r.json()
+    assert len(perms) > 0
+    # Check that can_import field exists
+    assert "can_import" in perms[0]
+
+
+@pytest.mark.asyncio
+async def test_only_admin_can_update_permissions(ceo_headers):
+    """Only admin can update permissions, CEO cannot."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/permissions/update", headers=ceo_headers,
+                          json={"role": "worker", "module": "employees", "can_view": 1})
+    assert r.status_code == 403
+
+
+# ── Import / Export Tests ──
+
+@pytest.mark.asyncio
+async def test_export_employees(auth_headers):
+    """Test exporting employees."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/employees", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["table"] == "employees"
+    assert "fields" in data
+    assert "data" in data
+    assert data["count"] > 0
+    # Check that data contains expected fields
+    assert "name" in data["fields"]
+    assert "grade" in data["fields"]
+
+
+@pytest.mark.asyncio
+async def test_export_suppliers(auth_headers):
+    """Test exporting suppliers."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/suppliers", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["table"] == "suppliers"
+    assert data["count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_export_timesheet(auth_headers):
+    """Test exporting timesheet."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/timesheet", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["table"] == "timesheet"
+    assert data["count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_export_invalid_table(auth_headers):
+    """Test exporting invalid table returns error."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/invalid_table", headers=auth_headers)
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_export_permission_denied(worker_headers):
+    """Worker cannot export employees."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/export/employees", headers=worker_headers)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_import_employees(auth_headers):
+    """Test batch importing employees."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import/employees", headers=auth_headers,
+                          json={"data": [
+                              {"name": "导入测试员工1", "grade": "P1", "status": "在职"},
+                              {"name": "导入测试员工2", "grade": "P2", "status": "在职"},
+                          ]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["success"] == 2
+    assert data["total"] == 2
+    assert len(data["errors"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_import_empty_data(auth_headers):
+    """Test importing empty data returns error."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import/employees", headers=auth_headers,
+                          json={"data": []})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_import_validation_errors(auth_headers):
+    """Test import with invalid records tracks errors."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import/employees", headers=auth_headers,
+                          json={"data": [
+                              {"name": "有效员工", "grade": "P1"},
+                              {"grade": "P1"},  # Missing name
+                          ]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["success"] == 1
+    assert len(data["errors"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_import_permission_denied(worker_headers):
+    """Worker cannot import employees."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/import/employees", headers=worker_headers,
+                          json={"data": [{"name": "test"}]})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_import_upsert(auth_headers):
+    """Test import with existing ID updates instead of duplicating."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Import with existing employee ID
+        r = await ac.post("/api/import/employees", headers=auth_headers,
+                          json={"data": [
+                              {"id": "YB-001", "name": "张三更新", "phone": "999999"},
+                          ]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["success"] == 1
+
+
+# ── CRUD for Remaining Tables ──
+
+@pytest.mark.asyncio
+async def test_update_timesheet(auth_headers):
+    """Test updating a timesheet record."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Get a timesheet record first
+        r = await ac.get("/api/timesheet", headers=auth_headers)
+        ts = r.json()
+        assert len(ts) > 0
+        tid = ts[0]["id"]
+        r = await ac.put(f"/api/timesheet/{tid}", headers=auth_headers,
+                         json={"notes": "测试更新"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_talent(auth_headers):
+    """Test creating a talent pool record."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/talent", headers=auth_headers,
+                          json={"name": "测试人才", "position_type": "库内"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert "id" in r.json()
+
+
+@pytest.mark.asyncio
+async def test_create_talent_validation(auth_headers):
+    """Test creating talent with missing name fails."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/talent", headers=auth_headers, json={})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_dispatch(auth_headers):
+    """Test creating a dispatch need."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch", headers=auth_headers,
+                          json={"warehouse_code": "UNA", "headcount": 5, "position": "库内"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_dispatch_validation(auth_headers):
+    """Test creating dispatch with missing warehouse fails."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/dispatch", headers=auth_headers, json={})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_schedule(auth_headers):
+    """Test creating a schedule."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/schedules", headers=auth_headers,
+                          json={"employee_id": "YB-001", "work_date": "2026-03-01",
+                                "warehouse_code": "UNA", "shift": "白班"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_schedule_validation(auth_headers):
+    """Test creating schedule with missing fields fails."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/schedules", headers=auth_headers, json={})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_delete_record_admin(auth_headers):
+    """Admin can delete records (soft-delete)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create a talent record first
+        r = await ac.post("/api/talent", headers=auth_headers,
+                          json={"name": "删除测试"})
+        tid = r.json()["id"]
+        # Delete it
+        r = await ac.delete(f"/api/talent_pool/{tid}", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_record_worker_denied(worker_headers):
+    """Worker cannot delete records."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.delete("/api/employees/YB-001", headers=worker_headers)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_invalid_table(auth_headers):
+    """Cannot delete from non-allowed tables."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.delete("/api/audit_logs/1", headers=auth_headers)
+    assert r.status_code == 400

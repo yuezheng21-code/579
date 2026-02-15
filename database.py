@@ -495,7 +495,9 @@ def init_db():
         can_view INTEGER DEFAULT 0, can_create INTEGER DEFAULT 0,
         can_edit INTEGER DEFAULT 0, can_delete INTEGER DEFAULT 0,
         can_export INTEGER DEFAULT 0, can_approve INTEGER DEFAULT 0,
+        can_import INTEGER DEFAULT 0,
         hidden_fields TEXT DEFAULT '',
+        editable_fields TEXT DEFAULT '',
         updated_by TEXT, updated_at TEXT DEFAULT (datetime('now')),
         UNIQUE(role, module))""",
     """CREATE TABLE IF NOT EXISTS audit_logs (
@@ -562,6 +564,8 @@ def ensure_demo_users():
     """确保演示账号可用（用于部署后角色测试）"""
     demo_users = [
         ("admin", "admin123", "系统管理员", "admin"),
+        ("ceo_wb", "ceo123", "王博(CEO)", "ceo"),
+        ("ceo_yly", "ceo123", "袁梁毅(CEO)", "ceo"),
         ("hr", "hr123", "赵慧(HR)", "hr"),
         ("mgr579", "579pass", "张伟(579)", "mgr"),
         ("fin", "fin123", "孙琳(财务)", "fin"),
@@ -670,7 +674,9 @@ def seed_data():
 
     # ── Users ──
     for u in [
-        ("admin","admin123","系统管理员","admin"),("hr","hr123","赵慧(HR)","hr"),
+        ("admin","admin123","系统管理员","admin"),
+        ("ceo_wb","ceo123","王博(CEO)","ceo"),("ceo_yly","ceo123","袁梁毅(CEO)","ceo"),
+        ("hr","hr123","赵慧(HR)","hr"),
         ("wh_una","una123","王磊(UNA)","wh"),("wh_dhl","dhl123","李娜(DHL)","wh"),
         ("finance","fin123","孙琳(财务)","fin"),("sup001","sup123","陈刚(德信)","sup"),
         ("mgr579","579pass","张伟(579)","mgr"),("worker1","w123","张三","worker"),
@@ -679,37 +685,52 @@ def seed_data():
                   (u[0],hash_password(u[1]),u[2],u[3]))
 
     # ── Permissions ──
+    # Roles hierarchy: admin (god view, highest) > ceo > mgr > hr > fin > wh > sup > worker
     ALL_M = ["dashboard","employees","suppliers","talent","dispatch","recruit",
              "timesheet","settlement","warehouse","schedule","templates",
              "clock","container","messages","analytics","admin","logs",
              "grades","quotation","files","leave","expense","performance",
              "mypage","accounts","whsalary"]
+    # role_perm: (can_view, can_create, can_edit, can_delete, can_export, can_approve, can_import)
     role_perm = {
-        "admin": (ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M),
+        "admin": (ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M),
+        "ceo": (ALL_M,
+                ["employees","suppliers","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","timesheet"],
+                ["employees","suppliers","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","leave","expense"],
+                ["employees","suppliers","talent","dispatch","recruit"],
+                ALL_M,
+                ALL_M,
+                ["employees","suppliers","timesheet","talent","dispatch","performance"]),
         "hr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                 "schedule","templates","messages","analytics","grades","files","leave","expense","performance","accounts","whsalary"],
                ["employees","suppliers","talent","dispatch","recruit","schedule","files","leave","expense","grades","performance","accounts","whsalary"],
                ["employees","suppliers","talent","dispatch","recruit","schedule","timesheet","grades","leave","performance","accounts","whsalary"],
-               [],[],["leave","expense"]),
+               [],
+               ["employees","suppliers","talent","timesheet","leave","expense","performance"],
+               ["leave","expense"],
+               ["employees","suppliers","talent","timesheet"]),
         "wh": (["dashboard","employees","timesheet","warehouse","schedule","clock","container","messages","leave","mypage"],
-               ["container","schedule"],["container","schedule"],[],["timesheet","container"],["timesheet","container"]),
+               ["container","schedule"],["container","schedule"],[],["timesheet","container"],["timesheet","container"],[]),
         "fin": (["dashboard","employees","timesheet","settlement","suppliers","analytics","expense","quotation"],
-               [],[],[],["timesheet","settlement","analytics","expense"],["timesheet","expense"]),
-        "sup": (["dashboard","employees","timesheet","settlement"],[],[],[],[],[]),
+               [],[],[],["timesheet","settlement","analytics","expense"],["timesheet","expense"],[]),
+        "sup": (["dashboard","employees","timesheet","settlement"],[],[],[],[],[],[]),
         "mgr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                  "warehouse","schedule","templates","clock","container","messages","analytics",
                  "grades","quotation","files","leave","expense","performance","accounts","whsalary"],
                 ["employees","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary"],
                 ["employees","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary"],
-                [],[],["leave","quotation"]),
-        "worker": (["clock","container","schedule","leave","expense","mypage"],["container","leave","expense"],[],[],[],[]),
+                [],
+                ["employees","timesheet","performance"],
+                ["leave","quotation"],
+                ["employees","timesheet"]),
+        "worker": (["clock","container","schedule","leave","expense","mypage"],["container","leave","expense"],[],[],[],[],[]),
     }
-    for role,(v,cr,ed,dl,ex,ap) in role_perm.items():
+    for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
         for mod in ALL_M:
-            c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,hidden_fields)
-                VALUES(?,?,?,?,?,?,?,?,?)
+            c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,can_import,hidden_fields,editable_fields)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(role, module) DO NOTHING""",
-                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),""))
+                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),"",""))
 
     # ── Warehouses (客户仓库 - 第三方劳务派遣) ──
     for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,""),

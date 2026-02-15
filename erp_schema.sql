@@ -310,7 +310,9 @@ CREATE TABLE IF NOT EXISTS permission_overrides (
     can_view INTEGER DEFAULT 0, can_create INTEGER DEFAULT 0,
     can_edit INTEGER DEFAULT 0, can_delete INTEGER DEFAULT 0,
     can_export INTEGER DEFAULT 0, can_approve INTEGER DEFAULT 0,
+    can_import INTEGER DEFAULT 0,
     hidden_fields TEXT DEFAULT '',
+    editable_fields TEXT DEFAULT '',
     updated_by TEXT, updated_at TEXT DEFAULT (datetime('now')),
     UNIQUE(role, module));
 
