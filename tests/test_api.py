@@ -2919,3 +2919,144 @@ async def test_quotation_pdf_multiple_records(auth_headers):
         assert r.headers.get("content-type") == "application/pdf"
         assert r.content[:4] == b"%PDF"
         assert len(r.content) > 200  # PDF should have meaningful content
+
+
+@pytest.mark.asyncio
+async def test_regions_table_seeded():
+    """Regions table should be populated with seed data."""
+    db = database.get_db()
+    regions = db.execute("SELECT * FROM regions ORDER BY code").fetchall()
+    db.close()
+    assert len(regions) >= 3
+    names = {r["name"] for r in regions}
+    assert "鲁尔西" in names
+    assert "鲁尔东" in names
+    assert "南战区" in names
+    # Each region should have a manager assigned
+    for r in regions:
+        assert r["manager_name"]
+        assert r["warehouse_codes"]
+
+
+@pytest.mark.asyncio
+async def test_get_regions_returns_warehouses(auth_headers):
+    """GET /api/regions should return regions with enriched warehouse details."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/regions", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) >= 3
+    # Find 鲁尔西 region - should have enriched warehouse objects
+    ruhr_west = [d for d in data if d["name"] == "鲁尔西"][0]
+    assert "manager_name" in ruhr_west
+    assert ruhr_west["manager_name"] != ""
+    assert "code" in ruhr_west  # Region has its own code
+    assert len(ruhr_west["warehouses"]) >= 2
+
+
+@pytest.mark.asyncio
+async def test_create_region(auth_headers):
+    """POST /api/regions should create a new region."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/regions", headers=auth_headers, json={
+            "code": "REG-TEST",
+            "name": "测试大区",
+            "description": "测试用大区",
+            "warehouse_codes": "",
+            "status": "启用"
+        })
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert r.json()["code"] == "REG-TEST"
+
+
+@pytest.mark.asyncio
+async def test_create_region_validation(auth_headers):
+    """POST /api/regions should fail without code or name."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/regions", headers=auth_headers, json={})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_region(auth_headers):
+    """PUT /api/regions/{code} should update a region."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/regions/REG-RUHRW", headers=auth_headers, json={
+            "description": "更新描述"
+        })
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_region_not_found(auth_headers):
+    """PUT /api/regions/{code} should return 404 for non-existent region."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/regions/NONEXISTENT", headers=auth_headers, json={
+            "description": "test"
+        })
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_region(auth_headers):
+    """DELETE /api/regions/{code} should delete a region."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # First create a region to delete
+        await ac.post("/api/regions", headers=auth_headers, json={
+            "code": "REG-DEL",
+            "name": "待删除大区",
+            "warehouse_codes": ""
+        })
+        r = await ac.delete("/api/regions/REG-DEL", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_delete_region_not_found(auth_headers):
+    """DELETE /api/regions/{code} should return 404 for non-existent region."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.delete("/api/regions/NONEXISTENT", headers=auth_headers)
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_region_manager_permissions_endpoint(auth_headers):
+    """GET /api/regions/permissions should return P8 permission details."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/regions/permissions", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["grade"] == "P8"
+    assert data["data_scope"] == "regional"
+    assert data["salary_scope"] == "regional"
+    assert data["can_dispatch_request"] is True
+    assert data["can_transfer_request"] is True
+    assert "permissions_detail" in data
+    assert len(data["permissions_detail"]) > 0
+    assert "approval_flow" in data
+
+
+@pytest.mark.asyncio
+async def test_region_worker_cannot_create():
+    """Worker role should not be able to create regions."""
+    from app import make_token
+    worker_token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {worker_token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/regions", headers=headers, json={
+            "code": "REG-FAIL",
+            "name": "不允许"
+        })
+    assert r.status_code == 403

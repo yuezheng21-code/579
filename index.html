@@ -307,7 +307,7 @@ const API = {
     return r.json();
   },
   get(u){return this.req('GET',u)}, post(u,b){return this.req('POST',u,b)},
-  put(u,b){return this.req('PUT',u,b)},
+  put(u,b){return this.req('PUT',u,b)}, delete(u){return this.req('DELETE',u)},
 };
 
 // ══════ Toast ══════
@@ -1960,6 +1960,109 @@ const CompliancePage=({t,lang})=>{
         isDE?'Alle Arbeitszeiten sind konform':'所有工时记录符合德国劳动法规定')));
 };
 
+// ══════ Region Management (大区管理) ══════
+const RegionPage=({t,user})=>{
+  const[regions,setRegions]=useState([]);const[perms,setPerms]=useState(null);
+  const[showEdit,setShowEdit]=useState(null);const[whs,setWhs]=useState([]);
+  const[emps,setEmps]=useState([]);
+  const load=()=>{
+    API.get('/api/regions').then(setRegions);
+    API.get('/api/regions/permissions').then(setPerms);
+    API.get('/api/warehouses').then(setWhs);
+    API.get('/api/employees').then(r=>setEmps((r||[]).filter(e=>e.grade==='P8'||e.grade==='P9')));
+  };
+  useEffect(load,[]);
+  const isAdmin=user&&(user.role==='admin'||user.role==='ceo'||user.role==='mgr');
+  const save=async()=>{
+    if(showEdit._isNew){
+      const d={...showEdit};delete d._isNew;
+      await API.post('/api/regions',d);
+    }else{
+      await API.put('/api/regions/'+showEdit.code,showEdit);
+    }
+    showToast('保存成功');setShowEdit(null);load();
+  };
+  const del=async(code)=>{
+    if(!confirm('确认删除该大区?'))return;
+    await API.delete('/api/regions/'+code);showToast('删除成功');load();
+  };
+  const scopeColors={'regional':'var(--blue)','all':'var(--green)','own_warehouse':'var(--orange)'};
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'flex',style:{justifyContent:'space-between',alignItems:'center',marginBottom:16}},
+      React.createElement('h3',{style:{margin:0}},'🗺️ 大区管理'),
+      isAdmin&&React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,code:'',name:'',manager_id:'',manager_name:'',description:'',warehouse_codes:'',status:'启用'})},'+ 新增大区')),
+    React.createElement('div',{className:'stats'},
+      [{n:regions.length,l:'大区总数',c:'var(--pri)'},
+       {n:regions.reduce((a,r)=>(r.warehouses||[]).length+a,0),l:'覆盖仓库数',c:'var(--blue)'},
+       {n:regions.filter(r=>r.manager_name).length,l:'已分配经理',c:'var(--green)'}
+      ].map((s,i)=>React.createElement('div',{key:i,className:'stat'},
+        React.createElement('div',{className:'num',style:{color:s.c}},s.n),
+        React.createElement('div',{className:'label'},s.l)))),
+    regions.map(reg=>React.createElement('div',{key:reg.code,className:'card',style:{marginBottom:16}},
+      React.createElement('div',{className:'flex',style:{justifyContent:'space-between',alignItems:'center',marginBottom:12}},
+        React.createElement('div',null,
+          React.createElement('h4',{style:{margin:0,display:'inline'}},'📍 ',reg.name),
+          React.createElement('span',{style:{marginLeft:8,fontSize:11,background:reg.status==='启用'?'var(--green)':'var(--text3)',color:'#fff',padding:'2px 8px',borderRadius:4}},reg.status||'启用'),
+          React.createElement('span',{style:{marginLeft:8,fontSize:12,color:'var(--text3)'}},reg.code)),
+        React.createElement('div',{style:{display:'flex',gap:4}},
+          isAdmin&&React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(reg)},'编辑'),
+          user&&user.role==='admin'&&React.createElement('button',{className:'btn btn-sm btn-ghost',style:{color:'var(--red)'},onClick:()=>del(reg.code)},'删除'))),
+      React.createElement('div',{style:{display:'flex',gap:24,flexWrap:'wrap'}},
+        React.createElement('div',{style:{flex:1,minWidth:200}},
+          React.createElement('div',{style:{fontSize:12,color:'var(--text3)',marginBottom:4}},'👤 大区经理'),
+          React.createElement('div',{style:{fontWeight:600,fontSize:14}},reg.manager_name||'未分配'),
+          reg.manager_id&&React.createElement('div',{style:{fontSize:11,color:'var(--text3)'}},reg.manager_id)),
+        React.createElement('div',{style:{flex:1,minWidth:200}},
+          React.createElement('div',{style:{fontSize:12,color:'var(--text3)',marginBottom:4}},'📝 描述'),
+          React.createElement('div',{style:{fontSize:13}},reg.description||'-')),
+        React.createElement('div',{style:{flex:2,minWidth:300}},
+          React.createElement('div',{style:{fontSize:12,color:'var(--text3)',marginBottom:4}},'🏗️ 管辖仓库 ('+(reg.warehouses||[]).length+'个)'),
+          React.createElement('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},
+            (reg.warehouses||[]).map(w=>React.createElement('span',{key:w.code,style:{background:'var(--bg2)',padding:'4px 10px',borderRadius:6,fontSize:12,border:'1px solid var(--border)'}},
+              w.name,' ',React.createElement('span',{style:{color:'var(--text3)',fontSize:10}},w.code),
+              w.current_headcount!=null&&React.createElement('span',{style:{marginLeft:4,color:'var(--blue)',fontSize:10}},w.current_headcount+'人')))))))),
+    perms&&React.createElement('div',{className:'card',style:{marginTop:24}},
+      React.createElement('h4',{style:{margin:'0 0 12px'}},'🔐 大区经理权限说明 (P8 区域经理 / Regional Manager)'),
+      React.createElement('div',{style:{display:'flex',gap:12,marginBottom:16,flexWrap:'wrap'}},
+        React.createElement('span',{style:{background:scopeColors[perms.data_scope],color:'#fff',padding:'4px 12px',borderRadius:6,fontSize:12}},'数据范围: '+perms.data_scope),
+        React.createElement('span',{style:{background:scopeColors[perms.salary_scope],color:'#fff',padding:'4px 12px',borderRadius:6,fontSize:12}},'薪资权限: '+perms.salary_scope),
+        perms.can_dispatch_request&&React.createElement('span',{style:{background:'var(--green)',color:'#fff',padding:'4px 12px',borderRadius:6,fontSize:12}},'✓ 可提交派遣需求'),
+        perms.can_transfer_request&&React.createElement('span',{style:{background:'var(--green)',color:'#fff',padding:'4px 12px',borderRadius:6,fontSize:12}},'✓ 可发起人员调配')),
+      React.createElement('div',{className:'table-wrap'},
+        React.createElement('table',null,
+          React.createElement('thead',null,React.createElement('tr',null,
+            ['权限模块','权限范围'].map(h=>React.createElement('th',{key:h},h)))),
+          React.createElement('tbody',null,(perms.permissions_detail||[]).map((p,i)=>React.createElement('tr',{key:i},
+            React.createElement('td',{style:{fontWeight:600}},p.module),
+            React.createElement('td',null,p.scope)))))),
+      React.createElement('div',{style:{marginTop:12,padding:12,background:'var(--bg2)',borderRadius:8,fontSize:13}},
+        React.createElement('strong',null,'📋 审批流程: '),perms.approval_flow)),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增大区':'编辑大区'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'大区编码'),
+            React.createElement('input',{value:showEdit.code||'',onChange:e=>setShowEdit({...showEdit,code:e.target.value}),disabled:!showEdit._isNew})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'大区名称'),
+            React.createElement('input',{value:showEdit.name||'',onChange:e=>setShowEdit({...showEdit,name:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'状态'),
+            React.createElement('select',{value:showEdit.status||'启用',onChange:e=>setShowEdit({...showEdit,status:e.target.value})},
+              ['启用','停用'].map(s=>React.createElement('option',{key:s,value:s},s))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'大区经理'),
+            React.createElement('select',{value:showEdit.manager_id||'',onChange:e=>{const emp=emps.find(x=>x.id===e.target.value);setShowEdit({...showEdit,manager_id:e.target.value,manager_name:emp?emp.name:''})}},
+              React.createElement('option',{value:''},'-- 选择经理 --'),
+              emps.map(e=>React.createElement('option',{key:e.id,value:e.id},e.name+' ('+e.grade+')')))),
+          React.createElement('div',{className:'form-field',style:{flex:2}},React.createElement('label',null,'管辖仓库 (逗号分隔仓库编码)'),
+            React.createElement('input',{value:showEdit.warehouse_codes||'',onChange:e=>setShowEdit({...showEdit,warehouse_codes:e.target.value}),placeholder:whs.map(w=>w.code).join(', ')}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field',style:{flex:1}},React.createElement('label',null,'描述'),
+            React.createElement('textarea',{value:showEdit.description||'',onChange:e=>setShowEdit({...showEdit,description:e.target.value}),rows:2,style:{width:'100%'}}))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
+};
+
 // ══════ Main App ══════
 const MENU = [
   {group:'个人',items:[
@@ -1979,6 +2082,7 @@ const MENU = [
     {key:'schedule',icon:'📅',label:'排班'},
     {key:'dispatch',icon:'🚛',label:'派遣需求'},
     {key:'warehouse',icon:'🏗️',label:'仓库管理',roles:['admin','hr','mgr']},
+    {key:'regions',icon:'🗺️',label:'大区管理',roles:['admin','ceo','mgr']},
     {key:'safety',icon:'🛡️',label:'安全管理'},
   ]},
   {group:'人事',items:[
@@ -2022,6 +2126,7 @@ const App=()=>{
     suppliers:SuppliersPage, container:ContainerPage, schedule:SchedulePage,
     dispatch:DispatchPage, admin:AdminPage,
     orgchart:OrgChartPage, safety:SafetyPage, register:RegisterPage, compliance:CompliancePage,
+    regions:RegionPage,
   };
   const PageComp=pages[page];
 
