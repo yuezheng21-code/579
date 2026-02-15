@@ -290,6 +290,16 @@ def audit_log(username: str, action: str, resource_type: str, resource_id: str, 
         import sys
         print(f"AUDIT LOG FAILURE: {username} {action} {resource_type}/{resource_id} - Error: {e}", file=sys.stderr)
 
+# Foreign key columns in the employees table that must be NULL (not empty string) when unset
+_EMPLOYEE_FK_COLUMNS = ("primary_wh", "supplier_id", "grade")
+
+def _sanitize_employee_fk_fields(data: dict) -> dict:
+    """Convert empty string FK values to None to avoid FK constraint violations."""
+    for fk_col in _EMPLOYEE_FK_COLUMNS:
+        if fk_col in data and data[fk_col] == "":
+            data[fk_col] = None
+    return data
+
 # ── Auth ──
 class LoginReq(BaseModel):
     username: str
@@ -403,10 +413,7 @@ async def create_employee(request: Request, user=Depends(get_user)):
     if "id" not in data: data["id"] = f"YB-{uuid.uuid4().hex[:6].upper()}"
     data.setdefault("created_at", datetime.now().isoformat())
     data.setdefault("updated_at", datetime.now().isoformat())
-    # Convert empty string FK values to None to avoid FK constraint violations
-    for fk_col in ("primary_wh", "supplier_id", "grade"):
-        if fk_col in data and data[fk_col] == "":
-            data[fk_col] = None
+    _sanitize_employee_fk_fields(data)
     if create_account:
         data["has_account"] = 1
     try:
@@ -454,10 +461,7 @@ async def update_employee(eid: str, request: Request, user=Depends(get_user)):
     data = _enforce_editable_fields(data, role, "employees")
     if not data:
         raise HTTPException(403, "无可编辑字段")
-    # Convert empty string FK values to None to avoid FK constraint violations
-    for fk_col in ("primary_wh", "supplier_id", "grade"):
-        if fk_col in data and data[fk_col] == "":
-            data[fk_col] = None
+    _sanitize_employee_fk_fields(data)
     try:
         update("employees", "id", eid, data)
     except Exception as e:
