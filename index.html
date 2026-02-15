@@ -819,7 +819,7 @@ const PerfPage=({t})=>{
             React.createElement('td',null,r.review_period),React.createElement('td',null,r.review_type),
             React.createElement('td',{style:{fontWeight:700,fontSize:16,color:r.total_score>=90?'var(--green)':r.total_score>=80?'var(--pri)':'var(--yellow)'}},r.total_score),
             React.createElement('td',null,React.createElement('span',{className:`badge-s ${r.rating?.includes('A')?'bg-green':r.rating?.includes('B')?'bg-blue':'bg-yellow'}`},r.rating)),
-            React.createElement('td',null,React.createElement(SBadge,{s:r.status})))))));
+            React.createElement('td',null,React.createElement(SBadge,{s:r.status}))))))));
 };
 
 // ══════ Quotation ══════
