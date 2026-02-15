@@ -101,6 +101,42 @@ async def test_create_employee_success(auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_create_employee_empty_fk_fields(auth_headers):
+    """Empty string FK fields (primary_wh, supplier_id, grade) should be saved as NULL, not cause FK errors."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "FK测试员工", "primary_wh": "", "supplier_id": "", "grade": "",
+                                "status": "在职"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert "id" in data
+
+    # Verify the employee was actually saved
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r2 = await ac.get(f"/api/employees/{data['id']}", headers=auth_headers)
+    assert r2.status_code == 200
+    emp = r2.json()
+    assert emp["name"] == "FK测试员工"
+    assert emp["primary_wh"] is None
+    assert emp["supplier_id"] is None
+    assert emp["grade"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_employee_empty_fk_fields(auth_headers):
+    """Updating employee with empty FK fields should convert them to NULL."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Update existing employee YB-001 with empty primary_wh
+        r = await ac.put("/api/employees/YB-001", headers=auth_headers,
+                         json={"primary_wh": "", "supplier_id": ""})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_employee_with_account(auth_headers):
     """Creating an employee with create_account=True should also generate a user account."""
     transport = ASGITransport(app=app)

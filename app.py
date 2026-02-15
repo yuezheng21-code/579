@@ -403,6 +403,10 @@ async def create_employee(request: Request, user=Depends(get_user)):
     if "id" not in data: data["id"] = f"YB-{uuid.uuid4().hex[:6].upper()}"
     data.setdefault("created_at", datetime.now().isoformat())
     data.setdefault("updated_at", datetime.now().isoformat())
+    # Convert empty string FK values to None to avoid FK constraint violations
+    for fk_col in ("primary_wh", "supplier_id", "grade"):
+        if fk_col in data and data[fk_col] == "":
+            data[fk_col] = None
     if create_account:
         data["has_account"] = 1
     try:
@@ -450,6 +454,10 @@ async def update_employee(eid: str, request: Request, user=Depends(get_user)):
     data = _enforce_editable_fields(data, role, "employees")
     if not data:
         raise HTTPException(403, "无可编辑字段")
+    # Convert empty string FK values to None to avoid FK constraint violations
+    for fk_col in ("primary_wh", "supplier_id", "grade"):
+        if fk_col in data and data[fk_col] == "":
+            data[fk_col] = None
     try:
         update("employees", "id", eid, data)
     except Exception as e:
