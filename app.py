@@ -1862,7 +1862,11 @@ async def import_table(table: str, request: Request, user=Depends(get_user)):
                         record["id"] = f"DN-{uuid.uuid4().hex[:6]}"
                 now = datetime.now().isoformat()
                 record.setdefault("created_at", now)
-                record.setdefault("updated_at", now)
+                # Only set updated_at for tables that have this column
+                _tables_with_updated_at = {"employees", "suppliers", "timesheet", "warehouses",
+                                           "leave_requests", "expense_claims", "performance_reviews"}
+                if table in _tables_with_updated_at:
+                    record.setdefault("updated_at", now)
 
                 # Validate required fields
                 if table == "employees" and not record.get("name"):
@@ -1878,7 +1882,8 @@ async def import_table(table: str, request: Request, user=Depends(get_user)):
                 if existing:
                     # Update existing
                     update_data = {k: v for k, v in record.items() if k != id_col}
-                    update_data["updated_at"] = now
+                    if table in _tables_with_updated_at:
+                        update_data["updated_at"] = now
                     sets = ",".join(f"{k}=?" for k in update_data.keys())
                     db.execute(f"UPDATE {table} SET {sets} WHERE {id_col}=?",
                                list(update_data.values()) + [record[id_col]])
