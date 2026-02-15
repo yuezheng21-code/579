@@ -830,11 +830,34 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
         raise HTTPException(400, "员工ID、工作日期和仓库编码不能为空")
     if "id" not in data: data["id"] = f"WT-{uuid.uuid4().hex[:8]}"
 
-    # 检查是否已存在相同的工时记录
+    # ── German labor law compliance checks ──
+    hours = float(data.get("hours", 0))
+    if hours > 10:
+        raise HTTPException(400, "根据德国劳动法(ArbZG)，每日工作时间不得超过10小时 / Tägliche Arbeitszeit darf 10 Stunden nicht überschreiten")
+
     employee_id = data.get("employee_id")
     work_date = data.get("work_date")
     warehouse_code = data.get("warehouse_code")
-    
+
+    # Check weekly hours compliance (max 48h/week per German law)
+    if employee_id and work_date:
+        db = database.get_db()
+        # Calculate week start (Monday) for the given date
+        from datetime import date as dt_date
+        parts = work_date.split("-")
+        d = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
+        week_start = (d - __import__('datetime').timedelta(days=d.weekday())).isoformat()
+        week_end = (d + __import__('datetime').timedelta(days=6 - d.weekday())).isoformat()
+        weekly = db.execute(
+            "SELECT COALESCE(SUM(hours),0) as total FROM timesheet WHERE employee_id=? AND work_date>=? AND work_date<=?",
+            (employee_id, week_start, week_end)
+        ).fetchone()
+        weekly_total = (weekly["total"] if weekly else 0) + hours
+        db.close()
+        if weekly_total > 48:
+            raise HTTPException(400, f"该员工本周已工作{weekly_total-hours}小时，加上本次{hours}小时共{weekly_total}小时，超过德国劳动法48小时/周上限 / Wöchentliche Arbeitszeit würde 48 Stunden überschreiten")
+
+    # 检查是否已存在相同的工时记录
     if employee_id and work_date and warehouse_code:
         db = database.get_db()
         existing = db.execute("""
@@ -1902,6 +1925,216 @@ def get_payroll_preview(month: Optional[str] = None, user=Depends(get_user)):
         "total_count": len(rows),
         "total_gross": sum(r["gross_pay"] or 0 for r in rows),
         "total_net": sum(r["net_pay"] or 0 for r in rows)
+    }
+
+# ── Safety Incidents & Complaints - 安全事件与投诉 ──
+@app.get("/api/safety-incidents")
+def get_safety_incidents(warehouse_code: Optional[str] = None, status: Optional[str] = None, user=Depends(get_user)):
+    db = database.get_db()
+    sql = "SELECT * FROM safety_incidents WHERE 1=1"
+    params = []
+    if warehouse_code:
+        sql += " AND warehouse_code=?"
+        params.append(warehouse_code)
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    sql += " ORDER BY created_at DESC"
+    rows = db.execute(sql, params).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/safety-incidents")
+async def create_safety_incident(request: Request, user=Depends(get_user)):
+    data = await request.json()
+    if not data.get("description"):
+        raise HTTPException(400, "事件描述不能为空")
+    if "id" not in data:
+        data["id"] = f"SI-{uuid.uuid4().hex[:8]}"
+    data.setdefault("incident_type", "安全事件")
+    data.setdefault("severity", "一般")
+    data.setdefault("status", "待处理")
+    data.setdefault("reported_by", user.get("display_name", ""))
+    data.setdefault("reported_date", datetime.now().strftime("%Y-%m-%d"))
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    try:
+        insert("safety_incidents", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建安全事件失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "safety_incidents", data["id"], data.get("description", ""))
+    return {"ok": True, "id": data["id"]}
+
+@app.put("/api/safety-incidents/{incident_id}")
+async def update_safety_incident(incident_id: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    data["updated_at"] = datetime.now().isoformat()
+    if data.get("status") == "已解决" and not data.get("resolved_date"):
+        data["resolved_date"] = datetime.now().strftime("%Y-%m-%d")
+    db = database.get_db()
+    sets = ", ".join(f"{k}=?" for k in data)
+    vals = list(data.values()) + [incident_id]
+    db.execute(f"UPDATE safety_incidents SET {sets} WHERE id=?", vals)
+    db.commit(); db.close()
+    audit_log(user.get("username", ""), "update", "safety_incidents", incident_id, json.dumps(data, ensure_ascii=False))
+    return {"ok": True}
+
+# ── Org Chart - 组织架构 ──
+@app.get("/api/org-chart")
+def get_org_chart(user=Depends(get_user)):
+    """获取组织架构数据，按职级层级和仓库分组"""
+    db = database.get_db()
+    employees = db.execute(
+        "SELECT id, name, grade, position, primary_wh, source, supplier_id, status FROM employees WHERE status='在职' ORDER BY grade DESC, name"
+    ).fetchall()
+    warehouses = db.execute("SELECT code, name FROM warehouses").fetchall()
+    db.close()
+
+    grade_order = {"P9":0,"P8":1,"P7":2,"P6":3,"P5":4,"P4":5,"P3":6,"P2":7,"P1":8,"P0":9,
+                   "M5":0,"M4":1,"M3":2,"M2":3,"M1":4}
+    grade_titles = {
+        "P9":"运营总监","P8":"区域经理","P7":"驻仓经理","P6":"副经理",
+        "P5":"班组长","P4":"组长","P3":"技能工","P2":"资深操作员","P1":"操作员","P0":"供应商工人",
+        "M5":"总监","M4":"高级经理","M3":"经理","M2":"主管","M1":"专员"
+    }
+
+    wh_map = {w["code"]: w["name"] for w in warehouses}
+    emp_list = [dict(e) for e in employees]
+    for e in emp_list:
+        e["grade_order"] = grade_order.get(e["grade"], 99)
+        e["grade_title"] = grade_titles.get(e["grade"], e["grade"])
+
+    # Group by warehouse
+    by_wh = {}
+    for e in emp_list:
+        wh = e.get("primary_wh") or "未分配"
+        if wh not in by_wh:
+            by_wh[wh] = {"code": wh, "name": wh_map.get(wh, wh), "employees": []}
+        by_wh[wh]["employees"].append(e)
+
+    # Sort each warehouse group by grade
+    for wh_data in by_wh.values():
+        wh_data["employees"].sort(key=lambda x: x["grade_order"])
+
+    # Build hierarchy levels
+    levels = [
+        {"grade": "P9", "title": "运营总监 / Betriebsleiter", "employees": [e for e in emp_list if e["grade"] == "P9"]},
+        {"grade": "P8", "title": "区域经理 / Regionalleiter", "employees": [e for e in emp_list if e["grade"] == "P8"]},
+        {"grade": "P7", "title": "驻仓经理 / Lagerleiter", "employees": [e for e in emp_list if e["grade"] == "P7"]},
+        {"grade": "P5/P6", "title": "班组长 / Schichtleiter", "employees": [e for e in emp_list if e["grade"] in ("P5", "P6")]},
+        {"grade": "P4", "title": "组长 / Teamleiter", "employees": [e for e in emp_list if e["grade"] == "P4"]},
+        {"grade": "P2/P3", "title": "小组长/技能工 / Facharbeiter", "employees": [e for e in emp_list if e["grade"] in ("P2", "P3")]},
+        {"grade": "P0/P1", "title": "操作员 / Bediener", "employees": [e for e in emp_list if e["grade"] in ("P0", "P1")]},
+    ]
+
+    return {
+        "levels": levels,
+        "by_warehouse": list(by_wh.values()),
+        "total": len(emp_list)
+    }
+
+# ── Employee Self-Registration - 新员工自助申报 ──
+@app.post("/api/employee-register")
+async def employee_self_register(request: Request):
+    """新员工在线填写申报表格，无需登录。系统自动生成员工档案。
+    Neue Mitarbeiter-Selbstregistrierung / New employee self-registration"""
+    data = await request.json()
+    if not data.get("name") and not (data.get("family_name") and data.get("given_name")):
+        raise HTTPException(400, "姓名不能为空 / Name darf nicht leer sein")
+
+    # Auto-generate employee ID from naming rules
+    db = database.get_db()
+    rule = db.execute("SELECT * FROM id_naming_rules WHERE id='default'").fetchone()
+    if rule:
+        prefix = rule["prefix"]
+        sep = rule["separator"]
+        next_num = rule["next_number"]
+        pad = rule["padding"]
+        eid = f"{prefix}{sep}{str(next_num).zfill(pad)}"
+        db.execute("UPDATE id_naming_rules SET next_number=? WHERE id='default'", (next_num + 1,))
+    else:
+        eid = f"YB-{uuid.uuid4().hex[:6].upper()}"
+
+    # Build name from family_name + given_name if name not provided
+    if not data.get("name"):
+        data["name"] = f"{data.get('family_name', '')} {data.get('given_name', '')}".strip()
+
+    data["id"] = eid
+    data.setdefault("status", "在职")
+    data.setdefault("grade", "P1")
+    data.setdefault("position", "库内")
+    data.setdefault("source", "自有")
+    data.setdefault("tax_mode", "我方报税")
+    data.setdefault("join_date", datetime.now().strftime("%Y-%m-%d"))
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+
+    try:
+        insert("employees", data)
+        db.commit()
+    except Exception as e:
+        db.close()
+        raise HTTPException(500, f"创建员工失败: {str(e)}")
+    db.close()
+
+    return {"ok": True, "id": eid, "message": f"员工档案已创建 / Mitarbeiterakte erstellt: {eid}"}
+
+# ── ID Naming Rules - 员工ID命名规则 ──
+@app.get("/api/id-naming-rules")
+def get_id_naming_rules(user=Depends(get_user)):
+    db = database.get_db()
+    rows = db.execute("SELECT * FROM id_naming_rules").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.put("/api/id-naming-rules")
+async def update_id_naming_rules(request: Request, user=Depends(get_user)):
+    """管理员修改员工ID命名规则"""
+    data = await request.json()
+    data["updated_by"] = user.get("username", "")
+    data["updated_at"] = datetime.now().isoformat()
+    db = database.get_db()
+    db.execute(
+        "UPDATE id_naming_rules SET prefix=?, separator=?, next_number=?, padding=?, description=?, updated_by=?, updated_at=? WHERE id='default'",
+        (data.get("prefix", "YB"), data.get("separator", "-"), data.get("next_number", 1),
+         data.get("padding", 3), data.get("description", ""), data["updated_by"], data["updated_at"])
+    )
+    db.commit(); db.close()
+    audit_log(user.get("username", ""), "update", "id_naming_rules", "default", json.dumps(data, ensure_ascii=False))
+    return {"ok": True}
+
+# ── Compliance Check - 合规检查 ──
+@app.get("/api/compliance/work-hours")
+def check_work_hours_compliance(month: Optional[str] = None, user=Depends(get_user)):
+    """检查员工工时是否符合德国劳动法 / Überprüfung der Arbeitszeitkonformität"""
+    if not month:
+        month = datetime.now().strftime("%Y-%m")
+    db = database.get_db()
+    # Check daily violations (>10h)
+    daily_violations = db.execute("""
+        SELECT employee_id, employee_name, work_date, warehouse_code, hours
+        FROM timesheet WHERE work_date LIKE ? || '%' AND hours > 10
+        ORDER BY work_date, employee_id
+    """, (month,)).fetchall()
+    # Check weekly totals
+    weekly_data = db.execute("""
+        SELECT employee_id, employee_name,
+               strftime('%%W', work_date) as week_num,
+               SUM(hours) as total_hours,
+               COUNT(*) as work_days
+        FROM timesheet WHERE work_date LIKE ? || '%'
+        GROUP BY employee_id, week_num
+        HAVING total_hours > 48
+        ORDER BY total_hours DESC
+    """, (month,)).fetchall()
+    db.close()
+    return {
+        "month": month,
+        "daily_violations": [dict(r) for r in daily_violations],
+        "weekly_violations": [dict(r) for r in weekly_data],
+        "daily_count": len(daily_violations),
+        "weekly_count": len(weekly_data),
+        "compliant": len(daily_violations) == 0 and len(weekly_data) == 0
     }
 
 # ── PWA Manifest ──

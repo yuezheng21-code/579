@@ -572,6 +572,35 @@ def init_db():
         notes TEXT,
         created_at TEXT DEFAULT (datetime('now')),
         UNIQUE(month, step))""",
+    # ── Safety Incidents & Complaints - 安全事件与投诉 ──
+    """CREATE TABLE IF NOT EXISTS safety_incidents (
+        id TEXT PRIMARY KEY,
+        incident_type TEXT NOT NULL DEFAULT '安全事件',
+        severity TEXT DEFAULT '一般',
+        warehouse_code TEXT,
+        reported_by TEXT,
+        reported_date TEXT,
+        incident_date TEXT,
+        description TEXT,
+        involved_employees TEXT,
+        root_cause TEXT,
+        corrective_action TEXT,
+        status TEXT DEFAULT '待处理',
+        handler TEXT,
+        resolved_date TEXT,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')))""",
+    # ── ID Naming Rules - 员工ID命名规则 ──
+    """CREATE TABLE IF NOT EXISTS id_naming_rules (
+        id TEXT PRIMARY KEY,
+        prefix TEXT NOT NULL DEFAULT 'YB',
+        separator TEXT DEFAULT '-',
+        next_number INTEGER DEFAULT 1,
+        padding INTEGER DEFAULT 3,
+        description TEXT,
+        updated_by TEXT,
+        updated_at TEXT DEFAULT (datetime('now')))""",
     ]
     for sql in tables:
         c.execute(_adapt_sql_for_db(sql))
@@ -582,6 +611,7 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_timesheet_date ON timesheet(work_date)",
         "CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status)",
         "CREATE INDEX IF NOT EXISTS idx_users_employee ON users(employee_id)",
+        "CREATE INDEX IF NOT EXISTS idx_safety_incidents_status ON safety_incidents(status)",
     ]
     for idx_sql in indexes:
         try:
@@ -728,40 +758,40 @@ def seed_data():
              "timesheet","settlement","warehouse","schedule","templates",
              "clock","container","messages","analytics","admin","logs",
              "grades","quotation","files","leave","expense","performance",
-             "mypage","accounts","whsalary"]
+             "mypage","accounts","whsalary","safety"]
     # role_perm: (can_view, can_create, can_edit, can_delete, can_export, can_approve, can_import)
     role_perm = {
         "admin": (ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M,ALL_M),
         "ceo": (ALL_M,
-                ["employees","suppliers","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","timesheet"],
-                ["employees","suppliers","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","leave","expense"],
+                ["employees","suppliers","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","timesheet","safety"],
+                ["employees","suppliers","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","leave","expense","safety"],
                 ["employees","suppliers","talent","dispatch","recruit"],
                 ALL_M,
                 ALL_M,
                 ["employees","suppliers","timesheet","talent","dispatch","performance"]),
         "hr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
-                "schedule","templates","messages","analytics","grades","files","leave","expense","performance","accounts","whsalary"],
-               ["employees","suppliers","talent","dispatch","recruit","schedule","files","leave","expense","grades","performance","accounts","whsalary"],
-               ["employees","suppliers","talent","dispatch","recruit","schedule","timesheet","grades","leave","performance","accounts","whsalary"],
+                "schedule","templates","messages","analytics","grades","files","leave","expense","performance","accounts","whsalary","safety"],
+               ["employees","suppliers","talent","dispatch","recruit","schedule","files","leave","expense","grades","performance","accounts","whsalary","safety"],
+               ["employees","suppliers","talent","dispatch","recruit","schedule","timesheet","grades","leave","performance","accounts","whsalary","safety"],
                [],
-               ["employees","suppliers","talent","timesheet","leave","expense","performance"],
+               ["employees","suppliers","talent","timesheet","leave","expense","performance","safety"],
                ["leave","expense"],
                ["employees","suppliers","talent","timesheet"]),
-        "wh": (["dashboard","employees","timesheet","warehouse","schedule","clock","container","messages","leave","mypage"],
-               ["container","schedule"],["container","schedule"],[],["timesheet","container"],["timesheet","container"],[]),
+        "wh": (["dashboard","employees","timesheet","warehouse","schedule","clock","container","messages","leave","mypage","safety"],
+               ["container","schedule","safety"],["container","schedule","safety"],[],["timesheet","container"],["timesheet","container"],[]),
         "fin": (["dashboard","employees","timesheet","settlement","suppliers","analytics","expense","quotation"],
                [],[],[],["timesheet","settlement","analytics","expense"],["timesheet","expense"],[]),
         "sup": (["dashboard","employees","timesheet","settlement"],[],[],[],[],[],[]),
         "mgr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                  "warehouse","schedule","templates","clock","container","messages","analytics",
-                 "grades","quotation","files","leave","expense","performance","accounts","whsalary"],
-                ["employees","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary"],
-                ["employees","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary"],
+                 "grades","quotation","files","leave","expense","performance","accounts","whsalary","safety"],
+                ["employees","talent","dispatch","recruit","container","schedule","quotation","leave","expense","grades","files","performance","accounts","whsalary","safety"],
+                ["employees","talent","dispatch","recruit","container","schedule","timesheet","quotation","grades","performance","accounts","whsalary","safety"],
                 [],
-                ["employees","timesheet","performance"],
-                ["leave","quotation"],
+                ["employees","timesheet","performance","safety"],
+                ["leave","quotation","safety"],
                 ["employees","timesheet"]),
-        "worker": (["clock","container","schedule","leave","expense","mypage"],["container","leave","expense"],[],[],[],[],[]),
+        "worker": (["clock","container","schedule","leave","expense","mypage","safety"],["container","leave","expense","safety"],[],[],[],[],[]),
     }
     for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
         for mod in ALL_M:
@@ -911,6 +941,11 @@ def seed_data():
         ("ED-006","仓库管理制度","管理制度",None,None,"pdf",0,"仓库日常管理制度和考核标准","管理,制度",None,"admin","管理层","草稿"),
     ]:
         c.execute("INSERT INTO enterprise_documents(id,title,category,file_name,file_url,file_type,file_size,description,tags,warehouse_code,uploaded_by,send_to,status) VALUES("+",".join(["?"]*13)+")", ed)
+
+    # ── ID Naming Rules ──
+    c.execute("""INSERT INTO id_naming_rules(id,prefix,separator,next_number,padding,description,updated_by)
+        VALUES('default','YB','-',13,3,'默认员工ID规则: YB-001','admin')
+        ON CONFLICT(id) DO NOTHING""")
 
     conn.commit(); conn.close()
     print("✅ DB seeded with all modules")

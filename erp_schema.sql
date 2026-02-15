@@ -397,6 +397,37 @@ CREATE TABLE IF NOT EXISTS payroll_confirmations (
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE(month, step));
 
+-- ── Safety Incidents & Complaints - 安全事件与投诉 ──
+CREATE TABLE IF NOT EXISTS safety_incidents (
+    id TEXT PRIMARY KEY,
+    incident_type TEXT NOT NULL DEFAULT '安全事件',
+    severity TEXT DEFAULT '一般',
+    warehouse_code TEXT,
+    reported_by TEXT,
+    reported_date TEXT,
+    incident_date TEXT,
+    description TEXT,
+    involved_employees TEXT,
+    root_cause TEXT,
+    corrective_action TEXT,
+    status TEXT DEFAULT '待处理',
+    handler TEXT,
+    resolved_date TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')));
+
+-- ── ID Naming Rules - 员工ID命名规则 ──
+CREATE TABLE IF NOT EXISTS id_naming_rules (
+    id TEXT PRIMARY KEY,
+    prefix TEXT NOT NULL DEFAULT 'YB',
+    separator TEXT DEFAULT '-',
+    next_number INTEGER DEFAULT 1,
+    padding INTEGER DEFAULT 3,
+    description TEXT,
+    updated_by TEXT,
+    updated_at TEXT DEFAULT (datetime('now')));
+
 -- ============================================================================
 -- Indexes for Better Performance and Data Integrity
 -- ============================================================================
@@ -405,3 +436,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_timesheet_unique ON timesheet(employee_id,
 CREATE INDEX IF NOT EXISTS idx_timesheet_date ON timesheet(work_date);
 CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
 CREATE INDEX IF NOT EXISTS idx_users_employee ON users(employee_id);
+CREATE INDEX IF NOT EXISTS idx_safety_incidents_status ON safety_incidents(status);
