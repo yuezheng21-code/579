@@ -404,6 +404,7 @@ async def test_get_enterprise_docs_by_category(auth_headers):
         r = await ac.get("/api/enterprise-docs?category=安全培训", headers=auth_headers)
     assert r.status_code == 200
     docs = r.json()
+    assert len(docs) > 0
     assert all(d["category"] == "安全培训" for d in docs)
 
 

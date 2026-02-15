@@ -705,7 +705,7 @@ async def create_enterprise_doc(request: Request, user=Depends(get_user)):
     data = await request.json()
     if not data.get("title"):
         raise HTTPException(400, "文档标题不能为空")
-    data["id"] = f"ED-{uuid.uuid4().hex[:6]}"
+    data["id"] = f"ED-{uuid.uuid4().hex[:10]}"
     data.setdefault("category", "通用")
     data.setdefault("status", "已发布")
     data.setdefault("uploaded_by", user.get("display_name", ""))
