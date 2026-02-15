@@ -18,6 +18,44 @@ else:
     import sqlite3
 
 
+class PgRowWrapper:
+    """Wraps PostgreSQL RealDictRow to support both integer and string indexing"""
+    def __init__(self, row):
+        self._row = row
+        self._keys = list(row.keys())
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._row[self._keys[key]]
+        return self._row[key]
+
+    def __contains__(self, key):
+        return key in self._row
+
+    def __repr__(self):
+        return repr(self._row)
+
+    def __len__(self):
+        return len(self._row)
+
+    def keys(self):
+        return self._row.keys()
+
+    def values(self):
+        return self._row.values()
+
+    def items(self):
+        return self._row.items()
+
+    def get(self, key, default=None):
+        if isinstance(key, int):
+            try:
+                return self._row[self._keys[key]]
+            except IndexError:
+                return default
+        return self._row.get(key, default)
+
+
 class CursorWrapper:
     """Wrapper for cursor to handle placeholder conversion and result formatting"""
     def __init__(self, cursor, is_postgres=False):
@@ -66,15 +104,25 @@ class CursorWrapper:
         return self._cursor.executemany(sql, params_list)
     
     def fetchone(self):
-        return self._cursor.fetchone()
+        row = self._cursor.fetchone()
+        if row is not None and self._is_postgres:
+            return PgRowWrapper(row)
+        return row
     
     def fetchall(self):
-        return self._cursor.fetchall()
+        rows = self._cursor.fetchall()
+        if self._is_postgres:
+            return [PgRowWrapper(r) for r in rows]
+        return rows
     
     def fetchmany(self, size=None):
         if size is None:
-            return self._cursor.fetchmany()
-        return self._cursor.fetchmany(size)
+            rows = self._cursor.fetchmany()
+        else:
+            rows = self._cursor.fetchmany(size)
+        if self._is_postgres:
+            return [PgRowWrapper(r) for r in rows]
+        return rows
     
     @property
     def rowcount(self):
