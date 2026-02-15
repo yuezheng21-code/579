@@ -1,7 +1,7 @@
 """渊博+579 HR V6 Database — All Modules (Enhanced with Warehouse Salary Config)
 Database Abstraction Layer supporting both SQLite and PostgreSQL
 """
-import os, random, json
+import os, random, json, re
 from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "hr_system.db")
@@ -401,6 +401,7 @@ def init_db():
         contract_end_date TEXT,                  -- 服务合同结束日期
         headcount_quota INTEGER DEFAULT 0,       -- 合同约定人数
         current_headcount INTEGER DEFAULT 0,     -- 当前派遣人数
+        region TEXT DEFAULT '',                  -- 所属区域 (南战区/鲁尔西/鲁尔东)
         updated_at TEXT DEFAULT (datetime('now')))""",
     # ── NEW: Warehouse Salary Config - 仓库薪资配置表 ──
     """CREATE TABLE IF NOT EXISTS warehouse_salary_config (
@@ -816,20 +817,36 @@ def seed_data():
         "sup": "own_supplier",
         "worker": "self_only",
     }
+    # Default hidden_fields per role per module for sensitive data protection
+    # Sensitive employee fields: birth_date, id_number, tax_no, tax_id, ssn, iban,
+    # base_salary, hourly_rate, health_insurance, emergency_contact, emergency_phone
+    role_hidden_fields = {
+        "admin": {},   # admin sees all
+        "ceo": {},     # CEO sees all
+        "mgr": {"employees": "tax_no,tax_id,ssn,iban,health_insurance"},
+        "hr": {"employees": "iban"},
+        "fin": {"employees": "birth_date,id_number,emergency_contact,emergency_phone,work_permit_no"},
+        "wh": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
+        "sup": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
+        "worker": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,phone,email"},
+    }
     for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
         scope = role_data_scope.get(role, "all")
+        role_hf = role_hidden_fields.get(role, {})
         for mod in ALL_M:
+            hf = role_hf.get(mod, "")
             c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,can_import,hidden_fields,editable_fields,data_scope)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(role, module) DO NOTHING""",
-                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),"","",scope))
+                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),hf,"",scope))
 
     # ── Warehouses (客户仓库 - 第三方劳务派遣) ──
-    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,""),
-              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","第三方派遣","dhl@example.com","","纯派遣","2025-03-01","2026-06-30",15,10,""),
-              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","第三方派遣","579@example.com","","流程承包","2025-06-01","2026-12-31",20,12,""),
-              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,""),
-              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"")]:
+    # Regions: 南战区 (South), 鲁尔西 (Ruhr West), 鲁尔东 (Ruhr East)
+    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,"鲁尔西",""),
+              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","第三方派遣","dhl@example.com","","纯派遣","2025-03-01","2026-06-30",15,10,"鲁尔西",""),
+              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","第三方派遣","579@example.com","","流程承包","2025-06-01","2026-12-31",20,12,"鲁尔东",""),
+              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,"鲁尔东",""),
+              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"南战区","")]:
         c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*len(w))+")", w)
 
     # ── NEW: Warehouse Salary Config ──
@@ -973,6 +990,154 @@ def seed_data():
 
     conn.commit(); conn.close()
     print("✅ DB seeded with all modules")
+
+
+# ── Database Backup & Restore ──
+
+BACKUP_DIR = os.path.join(os.path.dirname(__file__), "backups")
+
+# Critical tables that must be preserved across upgrades
+BACKUP_TABLES = [
+    "employees", "users", "timesheet", "leave_requests", "leave_balances",
+    "expense_claims", "performance_reviews", "payslips", "payroll_confirmations",
+    "schedules", "container_records", "dispatch_transfers", "dispatch_needs",
+    "safety_incidents", "warehouses", "suppliers", "warehouse_salary_config",
+    "talent_pool", "recruit_progress", "grade_evaluations", "promotion_applications",
+    "bonus_applications", "quotation_records", "employee_files", "audit_logs",
+]
+
+
+def backup_database(tag: str = None) -> str:
+    """Backup all critical tables to a timestamped JSON file.
+    Returns the backup file path."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    label = f"_{tag}" if tag else ""
+    filename = f"backup_{timestamp}{label}.json"
+    filepath = os.path.join(BACKUP_DIR, filename)
+
+    conn = get_db()
+    backup_data = {"timestamp": datetime.now().isoformat(), "tag": tag or "", "tables": {}}
+
+    for table in BACKUP_TABLES:
+        # Validate table name against whitelist to prevent SQL injection
+        if table not in BACKUP_TABLES:
+            continue
+        try:
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            backup_data["tables"][table] = [dict(r) for r in rows]
+        except Exception as e:
+            # Table may not exist yet in older schema versions
+            print(f"⚠️ Backup skipped table {table}: {e}")
+            backup_data["tables"][table] = []
+
+    conn.close()
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(backup_data, f, ensure_ascii=False, indent=2, default=str)
+
+    print(f"✅ Database backup created: {filename} ({sum(len(v) for v in backup_data['tables'].values())} total rows)")
+    return filepath
+
+
+def list_backups() -> list:
+    """List available backup files with metadata."""
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    backups = []
+    for f in sorted(os.listdir(BACKUP_DIR), reverse=True):
+        if f.startswith("backup_") and f.endswith(".json"):
+            filepath = os.path.join(BACKUP_DIR, f)
+            try:
+                with open(filepath, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                table_counts = {t: len(rows) for t, rows in data.get("tables", {}).items() if rows}
+                backups.append({
+                    "filename": f,
+                    "timestamp": data.get("timestamp", ""),
+                    "tag": data.get("tag", ""),
+                    "size_bytes": os.path.getsize(filepath),
+                    "table_counts": table_counts,
+                    "total_rows": sum(table_counts.values()),
+                })
+            except Exception as e:
+                backups.append({"filename": f, "error": f"无法读取备份文件: {e}"})
+    return backups
+
+
+def restore_database(filename: str) -> dict:
+    """Restore critical data from a backup file using INSERT OR REPLACE.
+    Returns summary of restored rows per table."""
+    filepath = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"备份文件不存在: {filename}")
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        backup_data = json.load(f)
+
+    conn = get_db()
+    summary = {}
+    _backup_tables_set = set(BACKUP_TABLES)
+
+    for table, rows in backup_data.get("tables", {}).items():
+        if not rows:
+            continue
+        # Validate table name against whitelist to prevent SQL injection
+        if table not in _backup_tables_set:
+            print(f"⚠️ Restore skipped unknown table: {table}")
+            continue
+        restored = 0
+        skipped = 0
+        for row in rows:
+            cols = list(row.keys())
+            # Sanitize column names: only allow alphanumeric and underscore
+            if not all(re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', c) for c in cols):
+                skipped += 1
+                continue
+            vals = list(row.values())
+            placeholders = ",".join(["?"] * len(cols))
+            col_names = ",".join(cols)
+            try:
+                conn.execute(
+                    f"INSERT OR REPLACE INTO {table}({col_names}) VALUES({placeholders})", vals
+                )
+                restored += 1
+            except Exception:
+                skipped += 1
+        if skipped > 0:
+            print(f"⚠️ Restore: {table} — {restored} restored, {skipped} skipped")
+        summary[table] = restored
+
+    conn.commit()
+    conn.close()
+    print(f"✅ Database restored from {filename}: {sum(summary.values())} total rows")
+    return summary
+
+
+def auto_backup_before_upgrade() -> str:
+    """Create an automatic backup before database upgrade/reinitialization.
+    Only creates backup if there is existing data to preserve.
+    Returns backup filepath or empty string if no data to backup."""
+    try:
+        conn = get_db()
+        # Check if there's actual user data (not just seed data)
+        emp_count = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+        conn.close()
+        if emp_count > 0:
+            return backup_database(tag="pre_upgrade")
+        return ""
+    except Exception:
+        return ""  # DB may not exist yet (first run)
+
+
+def auto_restore_after_upgrade(backup_path: str) -> dict:
+    """Restore user data from a pre-upgrade backup after init_db/seed_data.
+    Only restores tables that had data in the backup.
+    Returns summary of restored rows."""
+    if not backup_path or not os.path.exists(backup_path):
+        return {}
+    filename = os.path.basename(backup_path)
+    return restore_database(filename)
+
 
 if __name__ == "__main__":
     import sys

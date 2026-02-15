@@ -6,6 +6,8 @@ __pycache__/
 .env
 /uploads/*
 !/uploads/.gitkeep
+/backups/*
+!/backups/.gitkeep
 .DS_Store
 Thumbs.db
 .pytest_cache/
