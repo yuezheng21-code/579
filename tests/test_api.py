@@ -3060,3 +3060,38 @@ async def test_region_worker_cannot_create():
             "name": "不允许"
         })
     assert r.status_code == 403
+
+
+# ── Employee Roster Association Tests ──
+
+@pytest.mark.asyncio
+async def test_employees_include_joined_fields(auth_headers):
+    """Test that /api/employees returns warehouse_name, supplier_name, and grade_title."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) > 0
+    # Find an employee with a known warehouse (YB-001 has primary_wh=UNA from seed data)
+    emp = next((e for e in data if e["id"] == "YB-001"), None)
+    assert emp is not None
+    assert "warehouse_name" in emp
+    assert "supplier_name" in emp
+    assert "grade_title" in emp
+    # YB-001 has primary_wh=UNA, so warehouse_name should be resolved
+    assert emp["warehouse_name"] is not None
+
+
+@pytest.mark.asyncio
+async def test_employee_detail_includes_joined_fields(auth_headers):
+    """Test that /api/employees/{eid} returns warehouse_name, supplier_name, and grade_title."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees/YB-001", headers=auth_headers)
+    assert r.status_code == 200
+    emp = r.json()
+    assert "warehouse_name" in emp
+    assert "supplier_name" in emp
+    assert "grade_title" in emp
+    assert emp["warehouse_name"] is not None

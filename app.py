@@ -344,30 +344,42 @@ def pin_login(req: PinReq):
     return {"token": token, "user": {"username": emp["id"], "display_name": emp["name"], "role": "worker", "employee_id": emp["id"]}}
 
 # ── Employees ──
+_EMP_JOIN_SQL = """SELECT e.*, s.name as supplier_name, w.name as warehouse_name,
+    g.title_zh as grade_title
+    FROM employees e
+    LEFT JOIN suppliers s ON s.id = e.supplier_id
+    LEFT JOIN warehouses w ON w.code = e.primary_wh
+    LEFT JOIN grade_levels g ON g.code = e.grade"""
+
 @app.get("/api/employees")
 def get_employees(user=Depends(get_user)):
     role = user.get("role", "worker")
-    # Supplier users can only see their own workers
-    if role == "sup" and user.get("supplier_id"):
-        rows = q("employees", "supplier_id=?", (user["supplier_id"],))
-        return _filter_hidden_fields(rows, role, "employees")
-    # Warehouse users can only see employees in their warehouse
-    if role == "wh" and user.get("warehouse_code"):
-        wh = user["warehouse_code"]
-        db = database.get_db()
-        rows = db.execute(
-            "SELECT * FROM employees WHERE primary_wh=? OR dispatch_whs LIKE ?",
-            (wh, f"%{wh}%")
-        ).fetchall()
-        db.close()
+    db = database.get_db()
+    try:
+        # Supplier users can only see their own workers
+        if role == "sup" and user.get("supplier_id"):
+            rows = db.execute(f"{_EMP_JOIN_SQL} WHERE e.supplier_id=? ORDER BY e.id DESC",
+                              (user["supplier_id"],)).fetchall()
+        # Warehouse users can only see employees in their warehouse
+        elif role == "wh" and user.get("warehouse_code"):
+            wh = user["warehouse_code"]
+            rows = db.execute(f"{_EMP_JOIN_SQL} WHERE e.primary_wh=? OR e.dispatch_whs LIKE ? ORDER BY e.id DESC",
+                              (wh, f"%{wh}%")).fetchall()
+        else:
+            rows = db.execute(f"{_EMP_JOIN_SQL} ORDER BY e.id DESC").fetchall()
         rows = [dict(r) for r in rows]
-        return _filter_hidden_fields(rows, role, "employees")
-    rows = q("employees")
+    finally:
+        db.close()
     return _filter_hidden_fields(rows, role, "employees")
 
 @app.get("/api/employees/{eid}")
 def get_employee(eid: str, user=Depends(get_user)):
-    emps = q("employees", "id=?", (eid,))
+    db = database.get_db()
+    try:
+        rows = db.execute(f"{_EMP_JOIN_SQL} WHERE e.id=?", (eid,)).fetchall()
+        emps = [dict(r) for r in rows]
+    finally:
+        db.close()
     if not emps: raise HTTPException(404, "员工不存在")
     role = user.get("role", "worker")
     filtered = _filter_hidden_fields(emps, role, "employees")
