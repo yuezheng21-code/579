@@ -717,7 +717,7 @@ def seed_data():
               ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","第三方派遣","579@example.com","","流程承包","2025-06-01","2026-12-31",20,12,""),
               ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,""),
               ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"")]:
-        c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*32)+")", w)
+        c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*len(w))+")", w)
 
     # ── NEW: Warehouse Salary Config ──
     wh_salary_configs = [
@@ -759,7 +759,8 @@ def seed_data():
     for s in [("SUP-001","德信人力","人力供应商","渊博","CT-2025-001","2025-01-01","2026-12-31","月结","EUR","陈刚","+49-176-2001","chen@dexin.de","Köln","供应商自行报税","仓内操作,装卸柜",'["纯派遣","流程承包"]',"Sparkasse Köln","DE89370400440532013100",50,15,"合作中","A",""),
               ("SUP-002","欧华劳务","人力供应商","渊博","CT-2025-002","2025-03-01","2026-06-30","半月结","EUR","赵丽","+49-176-2002","zhao@ouhua.de","Düsseldorf","我方代报税","装卸柜,叉车",'["纯派遣"]',"Deutsche Bank","DE89370400440532013200",30,8,"合作中","B",""),
               ("SUP-003","环球人才","人力供应商","579","CT-2025-003","2025-06-01","2026-12-31","月结","EUR","孙明","+49-176-2003","sun@global.de","Duisburg","供应商自行报税","仓内操作,装卸柜,管理",'["纯派遣","整仓承包"]',"Commerzbank","DE89370400440532013300",40,10,"合作中","A","")]:
-        c.execute("INSERT INTO suppliers VALUES("+",".join(["?"]*25)+")", s+("",""))
+        sup_data = s+("","")
+        c.execute("INSERT INTO suppliers VALUES("+",".join(["?"]*len(sup_data))+")", sup_data)
 
     # ── Employees ──
     emps = [
@@ -777,7 +778,7 @@ def seed_data():
         ("YB-012","孙琳","+49-176-0021",None,"CN","女","1988-03-20","护照","E12345021","Köln 99","自有",None,"渊博","财务部","UNA","","财务专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T021","99012345678","1","SS-021","DE22223333444455556666","TK","中,德","","劳动合同",None,"2024-05-01","2027-04-30","孙明","+49-176-9021",None,None,20,30,"在职","2024-05-01",None,"2002","YB-012",0),
     ]
     for e in emps:
-        c.execute("INSERT INTO employees(id,name,phone,email,nationality,gender,birth_date,id_type,id_number,address,source,supplier_id,biz_line,department,primary_wh,dispatch_whs,position,grade,wage_level,settle_method,base_salary,hourly_rate,perf_bonus,extra_bonus,tax_mode,tax_no,tax_id,tax_class,ssn,iban,health_insurance,languages,special_skills,contract_type,dispatch_type,contract_start,contract_end,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,annual_leave_days,sick_leave_days,status,join_date,leave_date,pin,file_folder,has_account) VALUES("+",".join(["?"]*49)+")", e)
+        c.execute("INSERT INTO employees(id,name,phone,email,nationality,gender,birth_date,id_type,id_number,address,source,supplier_id,biz_line,department,primary_wh,dispatch_whs,position,grade,wage_level,settle_method,base_salary,hourly_rate,perf_bonus,extra_bonus,tax_mode,tax_no,tax_id,tax_class,ssn,iban,health_insurance,languages,special_skills,contract_type,dispatch_type,contract_start,contract_end,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,annual_leave_days,sick_leave_days,status,join_date,leave_date,pin,file_folder,has_account) VALUES("+",".join(["?"]*len(e))+")", e)
 
     # ── Leave Balances ──
     for e in emps:
