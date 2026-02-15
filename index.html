@@ -1045,22 +1045,44 @@ const PerfPage=({t})=>{
 // ══════ Quotation ══════
 const QuotePage=({t})=>{
   const[tpls,setTpls]=useState([]);const[recs,setRecs]=useState([]);const[tab,setTab]=useState('rec');
+  const[selIds,setSelIds]=useState([]);const[pdfLoading,setPdfLoading]=useState(false);
   useEffect(()=>{API.get('/api/quotation-templates').then(setTpls);API.get('/api/quotations').then(setRecs);},[]);
+  const toggleSel=(id)=>setSelIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
+  const toggleAll=()=>setSelIds(prev=>prev.length===recs.length?[]:recs.map(r=>r.id));
+  const genPdf=async()=>{
+    if(!selIds.length){showToast('请先选择报价记录');return;}
+    setPdfLoading(true);
+    try{
+      const token=localStorage.getItem('token');
+      const resp=await fetch('/api/quotation-pdf',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({ids:selIds})});
+      if(!resp.ok){const err=await resp.json().catch(()=>({}));showToast(err.detail||'生成PDF失败');return;}
+      const blob=await resp.blob();
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='quotation_'+new Date().toISOString().slice(0,10)+'.pdf';a.click();
+      URL.revokeObjectURL(a.href);showToast('PDF生成成功');
+    }catch(e){showToast('生成PDF失败');}finally{setPdfLoading(false);}
+  };
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'tabs'},
       [['rec','报价记录'],['tpl','报价模板']].map(([k,l])=>React.createElement('div',{key:k,className:`tab ${tab===k?'active':''}`,onClick:()=>setTab(k)},l))),
-    tab==='rec'?React.createElement('div',{className:'table-wrap'},
-      React.createElement('table',null,
-        React.createElement('thead',null,React.createElement('tr',null,
-          ['报价号','客户','类型','仓库','人数','单价','总额','审批','客户回复'].map(h=>React.createElement('th',{key:h},h)))),
-        React.createElement('tbody',null,recs.map(r=>React.createElement('tr',{key:r.id},
-          React.createElement('td',null,r.id),React.createElement('td',null,r.client_name),
-          React.createElement('td',null,`${r.biz_type}·${r.service_type}`),
-          React.createElement('td',null,r.warehouse_code),React.createElement('td',null,r.headcount),
-          React.createElement('td',{style:{color:'var(--green)',fontWeight:700}},`€${r.final_price}`),
-          React.createElement('td',{style:{fontWeight:700}},`€${r.total_amount}`),
-          React.createElement('td',null,React.createElement(SBadge,{s:r.approve_status})),
-          React.createElement('td',null,React.createElement(SBadge,{s:r.client_response})))))))
+    tab==='rec'?React.createElement('div',null,
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:10}},
+        React.createElement('button',{className:'btn',onClick:genPdf,disabled:pdfLoading||!selIds.length,
+          style:{opacity:selIds.length?1:0.5}},pdfLoading?'⏳ 生成中...':'📄 生成PDF'),
+        selIds.length>0&&React.createElement('span',{style:{fontSize:13,color:'var(--text2)'}},`已选 ${selIds.length} 条报价`)),
+      React.createElement('div',{className:'table-wrap'},
+        React.createElement('table',null,
+          React.createElement('thead',null,React.createElement('tr',null,
+            React.createElement('th',{style:{width:36}},React.createElement('input',{type:'checkbox',checked:recs.length>0&&selIds.length===recs.length,onChange:toggleAll})),
+            ['报价号','客户','类型','仓库','人数','单价','总额','审批','客户回复'].map(h=>React.createElement('th',{key:h},h)))),
+          React.createElement('tbody',null,recs.map(r=>React.createElement('tr',{key:r.id,style:{background:selIds.includes(r.id)?'var(--hover)':'transparent'}},
+            React.createElement('td',null,React.createElement('input',{type:'checkbox',checked:selIds.includes(r.id),onChange:()=>toggleSel(r.id)})),
+            React.createElement('td',null,r.id),React.createElement('td',null,r.client_name),
+            React.createElement('td',null,`${r.biz_type}·${r.service_type}`),
+            React.createElement('td',null,r.warehouse_code),React.createElement('td',null,r.headcount),
+            React.createElement('td',{style:{color:'var(--green)',fontWeight:700}},`€${r.final_price}`),
+            React.createElement('td',{style:{fontWeight:700}},`€${r.total_amount}`),
+            React.createElement('td',null,React.createElement(SBadge,{s:r.approve_status})),
+            React.createElement('td',null,React.createElement(SBadge,{s:r.client_response}))))))))
     :React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:12}},
       tpls.map(tp=>React.createElement('div',{key:tp.id,className:'card'},
         React.createElement('div',{style:{display:'flex',justifyContent:'space-between'}},
