@@ -170,8 +170,6 @@ def init_db():
         approver TEXT, approve_date TEXT, final_status TEXT DEFAULT '待审批',
         paid INTEGER DEFAULT 0, paid_date TEXT,
         created_at TEXT DEFAULT (datetime('now')))""",
-        paid INTEGER DEFAULT 0, paid_date TEXT,
-        created_at TEXT DEFAULT (datetime('now')))""",
     # ── Performance Reviews ──
     """CREATE TABLE IF NOT EXISTS performance_reviews (
         id TEXT PRIMARY KEY, employee_id TEXT, employee_name TEXT,

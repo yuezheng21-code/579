@@ -19,7 +19,7 @@
 ## 技术栈
 
 - **后端**: FastAPI (Python)
-- **数据库**: SQLite
+- **数据库**: SQLite (本地开发) / PostgreSQL (生产环境)
 - **前端**: HTML/JavaScript (单页应用)
 - **部署**: Docker, Railway
 
@@ -79,6 +79,10 @@ docker run -p 8080:8080 yb579-hr
 - `HR_TOKEN_SECRET`: JWT 令牌密钥（默认: yb579-dev-secret）
 - `HR_TOKEN_TTL`: 令牌有效期（秒，默认: 604800，即7天）
 - `PORT`: 应用端口（部署平台自动设置）
+- `DATABASE_URL`: PostgreSQL 连接字符串（可选）
+  - 示例: `postgresql://user:password@host:5432/dbname`
+  - 如果未设置或不以 `postgresql://` / `postgres://` 开头，将使用 SQLite（`hr_system.db`）
+  - PostgreSQL 模式适用于生产环境，SQLite 适用于本地开发
 
 ## 默认账户
 
