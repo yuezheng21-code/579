@@ -117,8 +117,9 @@ def _adapt_sql_for_db(sql):
     """Adapt SQL statement for the current database type"""
     if USE_POSTGRES:
         # Convert datetime('now') to CURRENT_TIMESTAMP
-        sql = sql.replace("datetime('now')", "CURRENT_TIMESTAMP")
+        # Replace the longer pattern first to avoid partial replacements
         sql = sql.replace("DEFAULT (datetime('now'))", "DEFAULT CURRENT_TIMESTAMP")
+        sql = sql.replace("datetime('now')", "CURRENT_TIMESTAMP")
         
         # Convert INTEGER PRIMARY KEY AUTOINCREMENT to SERIAL PRIMARY KEY
         sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
