@@ -698,9 +698,9 @@ const EmpPage=({t})=>{
   useEffect(()=>{API.get('/api/employees').then(setEmps)},[]);
   const filtered=emps.filter(e=>`${e.name}${e.id}${e.grade}${e.primary_wh}`.includes(q));
   const save=async()=>{
-    if(showEdit._isNew){const d={...showEdit};delete d._isNew;await API.post('/api/employees',d);}
-    else{await API.put(`/api/employees/${showEdit.id}`,showEdit);}
-    showToast('保存成功');setShowEdit(null);API.get('/api/employees').then(setEmps);
+    if(showEdit._isNew){const d={...showEdit};delete d._isNew;const r=await API.post('/api/employees',d);if(r&&r.account){showToast(`保存成功，账号已生成: ${r.account.username} / ${r.account.password}，角色: ${r.account.role}`);}else{showToast('保存成功');}}
+    else{await API.put(`/api/employees/${showEdit.id}`,showEdit);showToast('保存成功');}
+    setShowEdit(null);API.get('/api/employees').then(setEmps);
   };
   const doExport=async()=>{const r=await API.get('/api/export/employees');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='employees.json';a.click();showToast('导出成功');}};
   const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/employees',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}};inp.click();};
@@ -793,6 +793,14 @@ const EmpPage=({t})=>{
           React.createElement('div',{className:'form-field'},React.createElement('label',null,'状态 / Status'),
             React.createElement('select',{value:showEdit.status||'在职',onChange:e=>setShowEdit({...showEdit,status:e.target.value})},
               ['在职','离职'].map(s=>React.createElement('option',{key:s,value:s},s))))),
+        showEdit._isNew&&React.createElement('div',{style:{fontSize:12,color:'var(--text3)',marginTop:12,marginBottom:10}},'系统权限 / Systemberechtigungen'),
+        showEdit._isNew&&React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6}},
+            React.createElement('input',{type:'checkbox',checked:!!showEdit.create_account,onChange:e=>setShowEdit({...showEdit,create_account:e.target.checked,account_role:e.target.checked?(showEdit.account_role||'worker'):''})}),
+            '同时创建系统账号 / Systemkonto erstellen')),
+          showEdit.create_account&&React.createElement('div',{className:'form-field'},React.createElement('label',null,'系统角色 / Rolle'),
+            React.createElement('select',{value:showEdit.account_role||'worker',onChange:e=>setShowEdit({...showEdit,account_role:e.target.value})},
+              [{v:'worker',l:'员工 Worker'},{v:'wh',l:'仓库 Warehouse'},{v:'sup',l:'供应商 Supplier'},{v:'fin',l:'财务 Finance'},{v:'hr',l:'人事 HR'},{v:'mgr',l:'经理 Manager'},{v:'ceo',l:'CEO'},{v:'admin',l:'管理员 Admin'}].map(r=>React.createElement('option',{key:r.v,value:r.v},r.l))))),
         React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
           React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消 / Abbrechen'),
           React.createElement('button',{className:'btn btn-pri',onClick:save},'保存 / Speichern')))));

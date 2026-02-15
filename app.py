@@ -360,15 +360,51 @@ async def create_employee(request: Request, user=Depends(get_user)):
     data = await request.json()
     if not data.get("name"):
         raise HTTPException(400, "员工姓名不能为空")
+    # Extract account creation fields before inserting employee
+    create_account = data.pop("create_account", False)
+    account_role = data.pop("account_role", "worker")
     if "id" not in data: data["id"] = f"YB-{uuid.uuid4().hex[:6].upper()}"
     data.setdefault("created_at", datetime.now().isoformat())
     data.setdefault("updated_at", datetime.now().isoformat())
+    if create_account:
+        data["has_account"] = 1
     try:
         insert("employees", data)
     except Exception as e:
         raise HTTPException(500, f"创建员工失败: {str(e)}")
     audit_log(user.get("username", ""), "create", "employees", data["id"], f"创建员工: {data.get('name','')}")
-    return {"ok": True, "id": data["id"]}
+    result = {"ok": True, "id": data["id"]}
+    # Optionally create a system account for the new employee
+    if create_account:
+        VALID_ROLES = {"admin", "ceo", "mgr", "hr", "fin", "wh", "sup", "worker"}
+        if account_role not in VALID_ROLES:
+            account_role = "worker"
+        employee_id = data["id"]
+        username = employee_id.lower().replace("-", "")
+        password = generate_password(8)
+        password_hash = hash_password(password)
+        db = database.get_db()
+        try:
+            db.execute(
+                """INSERT INTO users(username, password_hash, display_name, role, employee_id, warehouse_code, biz_line)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (username, password_hash, data.get("name", ""), account_role,
+                 employee_id, data.get("primary_wh", ""), data.get("biz_line", "")))
+            db.commit()
+        except Exception as e:
+            # Revert has_account flag since account creation failed
+            try:
+                db.execute("UPDATE employees SET has_account=0 WHERE id=?", (employee_id,))
+                db.commit()
+            except Exception:
+                pass
+            raise HTTPException(500, f"创建账号失败: {str(e)}")
+        finally:
+            db.close()
+        audit_log(user.get("username", ""), "generate_account", "users", username,
+                  f"创建员工时同步生成账号, 角色: {account_role}")
+        result["account"] = {"username": username, "password": password, "role": account_role}
+    return result
 
 @app.put("/api/employees/{eid}")
 async def update_employee(eid: str, request: Request, user=Depends(get_user)):
