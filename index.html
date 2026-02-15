@@ -1216,9 +1216,14 @@ const ClockPage=({lang,t})=>{
 };
 
 // ══════ Suppliers Page ══════
-const SuppliersPage=({t})=>{
+const SuppliersPage=({t,user})=>{
   const[sups,setSups]=useState([]);const[showEdit,setShowEdit]=useState(null);
-  useEffect(()=>{API.get('/api/suppliers').then(setSups)},[]);
+  const[activities,setActivities]=useState(null);const[actTab,setActTab]=useState('workers');
+  const isSupplier=user&&user.role==='sup';
+  useEffect(()=>{
+    if(!isSupplier)API.get('/api/suppliers').then(setSups);
+    if(isSupplier)API.get('/api/supplier/worker-activities').then(setActivities);
+  },[]);
   const save=async()=>{
     if(showEdit._isNew){
       const d={...showEdit};delete d._isNew;
@@ -1229,6 +1234,53 @@ const SuppliersPage=({t})=>{
     showToast('保存成功');setShowEdit(null);
     API.get('/api/suppliers').then(setSups);
   };
+  // Supplier user view: show worker activities
+  if(isSupplier&&activities)return React.createElement('div',{className:'fade'},
+    React.createElement('h3',{style:{marginBottom:12}},'供应商工人动态'),
+    React.createElement('div',{className:'stats',style:{marginBottom:16}},
+      [{n:activities.summary?.total_workers||0,l:'总工人数',c:'var(--pri)'},
+       {n:activities.summary?.active_workers||0,l:'在职工人',c:'var(--green)'},
+       {n:(activities.summary?.monthly_hours||0).toFixed(1)+'h',l:'本月工时',c:'var(--cyan)'},
+       {n:activities.summary?.pending_leave||0,l:'待审批请假',c:'var(--warn)'}
+      ].map((s,i)=>React.createElement('div',{key:i,className:'stat'},
+        React.createElement('div',{className:'num',style:{color:s.c}},s.n),
+        React.createElement('div',{className:'label'},s.l)))),
+    activities.summary?.by_warehouse?.length>0&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:12}},
+      React.createElement('h4',{style:{marginBottom:8}},'按仓库分布'),
+      React.createElement('div',{style:{display:'flex',gap:12,flexWrap:'wrap'}},
+        (activities.summary.by_warehouse||[]).map((w,i)=>React.createElement('div',{key:i,className:'badge',
+          style:{padding:'4px 12px',background:'var(--bg)',borderRadius:8}},w.primary_wh+': '+w.c+'人')))),
+    React.createElement('div',{className:'tabs',style:{marginBottom:12}},
+      [['workers','工人列表'],['timesheet','工时记录'],['leave','请假记录']].map(([k,l])=>
+        React.createElement('div',{key:k,className:`tab ${actTab===k?'active':''}`,onClick:()=>setActTab(k)},l))),
+    actTab==='workers'&&React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['编号','姓名','职级','岗位','主仓库','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,(activities.workers||[]).map(w=>React.createElement('tr',{key:w.id},
+          React.createElement('td',null,w.id),React.createElement('td',{style:{fontWeight:700}},w.name),
+          React.createElement('td',{style:{color:gradeColor(w.grade)}},w.grade),
+          React.createElement('td',null,w.position||'-'),React.createElement('td',null,w.primary_wh||'-'),
+          React.createElement('td',null,React.createElement(SBadge,{s:w.status||'在职'}))))))),
+    actTab==='timesheet'&&React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['日期','员工','仓库','工时','时薪','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,(activities.timesheet||[]).map((r,i)=>React.createElement('tr',{key:i},
+          React.createElement('td',null,r.work_date),React.createElement('td',null,r.employee_name||r.employee_id),
+          React.createElement('td',null,r.warehouse_code),React.createElement('td',null,(r.hours||0)+'h'),
+          React.createElement('td',null,'€'+(r.hourly_pay||0).toFixed(2)),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status||'待审批'}))))))),
+    actTab==='leave'&&React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['员工','类型','开始','结束','天数','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,(activities.leave_requests||[]).map((lr,i)=>React.createElement('tr',{key:i},
+          React.createElement('td',null,lr.employee_name||lr.employee_id),React.createElement('td',null,lr.leave_type),
+          React.createElement('td',null,lr.start_date),React.createElement('td',null,lr.end_date),
+          React.createElement('td',null,lr.days),
+          React.createElement('td',null,React.createElement(SBadge,{s:lr.status||'待审批'}))))))));
+  // Normal supplier management view
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
       React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,name:'',type:'人力供应商',biz_line:'渊博',contact_name:'',contact_phone:'',contact_email:'',address:'',status:'合作中'})},'新增供应商')),
@@ -1372,6 +1424,13 @@ const AdminPage=({t,user})=>{
   const[selRole,setSelRole]=useState('');const[saving,setSaving]=useState(false);
   const PERM_KEYS=['can_view','can_create','can_edit','can_delete','can_export','can_approve','can_import'];
   const PERM_LABELS=['查看','新建','编辑','删除','导出','审批','导入'];
+  const SCOPE_OPTIONS=[
+    {value:'all',label:'全部数据'},
+    {value:'own_warehouse',label:'本仓库'},
+    {value:'own_department',label:'本部门'},
+    {value:'own_supplier',label:'本供应商'},
+    {value:'self_only',label:'仅自己'}
+  ];
   useEffect(()=>{
     API.get('/api/roles').then(r=>{setRoles(r);if(r.length)setSelRole(r[0].role)});
     API.get('/api/permissions').then(setPerms);
@@ -1389,23 +1448,41 @@ const AdminPage=({t,user})=>{
     }catch(e){showToast('更新失败: '+(e.message||''));}
     setSaving(false);
   };
+  const changeScope=async(mod,newScope)=>{
+    const p=rolePerms.find(r=>r.module===mod);
+    if(!p)return;
+    setSaving(true);
+    try{
+      await API.post('/api/permissions/update',{role:selRole,module:mod,...p,data_scope:newScope});
+      const updated=await API.get('/api/permissions');
+      setPerms(updated);showToast('数据范围已更新');
+    }catch(e){showToast('更新失败: '+(e.message||''));}
+    setSaving(false);
+  };
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'tabs',style:{marginBottom:12}},
       roles.map(r=>React.createElement('div',{key:r.role,className:`tab ${selRole===r.role?'active':''}`,
         onClick:()=>setSelRole(r.role)},r.label+' ('+r.role+')'))),
     React.createElement('div',{style:{fontSize:12,color:'var(--text3)',marginBottom:8}},
-      selRole==='admin'?'⚡ 管理员拥有上帝视角 - 所有权限自动开启，无需手动配置':'点击单元格切换权限'),
+      selRole==='admin'?'⚡ 管理员拥有上帝视角 - 所有权限自动开启，无需手动配置':
+      '点击单元格切换权限 | 数据范围: 控制该角色可访问的数据范围(职级/部门/仓库/供应商)'),
     React.createElement('div',{className:'table-wrap'},
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
           React.createElement('th',null,'模块'),
-          PERM_LABELS.map(l=>React.createElement('th',{key:l,style:{textAlign:'center'}},l)))),
+          PERM_LABELS.map(l=>React.createElement('th',{key:l,style:{textAlign:'center'}},l)),
+          React.createElement('th',{style:{textAlign:'center',minWidth:100}},'数据范围'))),
         React.createElement('tbody',null,rolePerms.map(p=>React.createElement('tr',{key:p.module},
           React.createElement('td',{style:{fontWeight:600}},t[p.module]||p.module),
           PERM_KEYS.map((k,i)=>React.createElement('td',{key:k,style:{textAlign:'center',cursor:selRole==='admin'?'default':'pointer',
             background:p[k]?'rgba(34,197,94,0.1)':'transparent'},
             onClick:()=>selRole!=='admin'&&toggle(p.module,k)},
-            React.createElement('span',{style:{fontSize:16}},p[k]?'✅':'❌')))))))));
+            React.createElement('span',{style:{fontSize:16}},p[k]?'✅':'❌'))),
+          React.createElement('td',{style:{textAlign:'center'}},
+            selRole==='admin'?React.createElement('span',{style:{fontSize:11,color:'var(--text3)'}},'全部'):
+            React.createElement('select',{value:p.data_scope||'all',style:{fontSize:11,padding:'2px 4px',borderRadius:4,border:'1px solid var(--border)'},
+              onChange:e=>changeScope(p.module,e.target.value)},
+              SCOPE_OPTIONS.map(o=>React.createElement('option',{key:o.value,value:o.value},o.label))))))))));
 };
 
 // ══════ Payroll Preview (发薪预览) ══════

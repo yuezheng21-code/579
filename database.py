@@ -502,6 +502,10 @@ def init_db():
         can_import INTEGER DEFAULT 0,
         hidden_fields TEXT DEFAULT '',
         editable_fields TEXT DEFAULT '',
+        data_scope TEXT DEFAULT 'all',
+        scope_grades TEXT DEFAULT '',
+        scope_departments TEXT DEFAULT '',
+        scope_warehouses TEXT DEFAULT '',
         updated_by TEXT, updated_at TEXT DEFAULT (datetime('now')),
         UNIQUE(role, module))""",
     """CREATE TABLE IF NOT EXISTS audit_logs (
@@ -631,26 +635,29 @@ def verify_password(password, hashed):
 def ensure_demo_users():
     """确保演示账号可用（用于部署后角色测试）"""
     demo_users = [
-        ("admin", "admin123", "系统管理员", "admin"),
-        ("ceo_wb", "ceo123", "王博(CEO)", "ceo"),
-        ("ceo_yly", "ceo123", "袁梁毅(CEO)", "ceo"),
-        ("hr", "hr123", "赵慧(HR)", "hr"),
-        ("mgr579", "579pass", "张伟(579)", "mgr"),
-        ("fin", "fin123", "孙琳(财务)", "fin"),
-        ("wh", "wh123", "王磊(仓库)", "wh"),
-        ("worker1", "w123", "张三", "worker"),
+        ("admin", "admin123", "系统管理员", "admin", None, None),
+        ("ceo_wb", "ceo123", "王博(CEO)", "ceo", None, None),
+        ("ceo_yly", "ceo123", "袁梁毅(CEO)", "ceo", None, None),
+        ("hr", "hr123", "赵慧(HR)", "hr", None, None),
+        ("mgr579", "579pass", "张伟(579)", "mgr", None, None),
+        ("fin", "fin123", "孙琳(财务)", "fin", None, None),
+        ("wh", "wh123", "王磊(仓库)", "wh", None, "UNA"),
+        ("sup1", "sup123", "陈刚(德信人力)", "sup", "SUP-001", None),
+        ("worker1", "w123", "张三", "worker", None, None),
     ]
     conn = get_db(); c = conn.cursor()
-    for username, password, display_name, role in demo_users:
+    for username, password, display_name, role, supplier_id, warehouse_code in demo_users:
         c.execute(
-            """INSERT INTO users(username,password_hash,display_name,role,active)
-               VALUES(?,?,?,?,1)
+            """INSERT INTO users(username,password_hash,display_name,role,supplier_id,warehouse_code,active)
+               VALUES(?,?,?,?,?,?,1)
                ON CONFLICT(username) DO UPDATE SET
                    password_hash=excluded.password_hash,
                    display_name=excluded.display_name,
                    role=excluded.role,
+                   supplier_id=excluded.supplier_id,
+                   warehouse_code=excluded.warehouse_code,
                    active=1""",
-            (username, hash_password(password), display_name, role),
+            (username, hash_password(password), display_name, role, supplier_id, warehouse_code),
         )
     conn.commit(); conn.close()
 
@@ -781,7 +788,8 @@ def seed_data():
                ["container","schedule","safety"],["container","schedule","safety"],[],["timesheet","container"],["timesheet","container"],[]),
         "fin": (["dashboard","employees","timesheet","settlement","suppliers","analytics","expense","quotation"],
                [],[],[],["timesheet","settlement","analytics","expense"],["timesheet","expense"],[]),
-        "sup": (["dashboard","employees","timesheet","settlement"],[],[],[],[],[],[]),
+        "sup": (["dashboard","employees","timesheet","settlement","schedule","leave","safety"],
+                ["leave"],["leave"],[],["employees","timesheet"],[],[]),
         "mgr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                  "warehouse","schedule","templates","clock","container","messages","analytics",
                  "grades","quotation","files","leave","expense","performance","accounts","whsalary","safety"],
@@ -793,12 +801,26 @@ def seed_data():
                 ["employees","timesheet"]),
         "worker": (["clock","container","schedule","leave","expense","mypage","safety"],["container","leave","expense","safety"],[],[],[],[],[]),
     }
+    # data_scope per role: determines what data the role can access
+    # 'all' = full access, 'own_warehouse' = only data for user's warehouse,
+    # 'own_supplier' = only data for user's supplier workers, 'self_only' = only own data
+    role_data_scope = {
+        "admin": "all",
+        "ceo": "all",
+        "mgr": "all",
+        "hr": "all",
+        "fin": "all",
+        "wh": "own_warehouse",
+        "sup": "own_supplier",
+        "worker": "self_only",
+    }
     for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
+        scope = role_data_scope.get(role, "all")
         for mod in ALL_M:
-            c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,can_import,hidden_fields,editable_fields)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,can_import,hidden_fields,editable_fields,data_scope)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(role, module) DO NOTHING""",
-                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),"",""))
+                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),"","",scope))
 
     # ── Warehouses (客户仓库 - 第三方劳务派遣) ──
     for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,""),

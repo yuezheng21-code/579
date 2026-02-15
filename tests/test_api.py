@@ -1565,3 +1565,230 @@ async def test_timesheet_compliance_daily_limit(auth_headers):
         }, headers=auth_headers)
         assert r.status_code == 400
         assert "10" in r.json()["detail"]
+
+
+# ── Tests for Permission Matrix Enhancement and Supplier Worker Visibility ──
+
+
+@pytest.fixture
+def sup_token():
+    """Get supplier auth token."""
+    from app import make_token
+    return make_token("sup1", "sup")
+
+
+@pytest.fixture
+def sup_headers(sup_token):
+    """Return headers with supplier token."""
+    return {"Authorization": f"Bearer {sup_token}"}
+
+
+@pytest.fixture
+def wh_token():
+    """Get warehouse auth token."""
+    from app import make_token
+    return make_token("wh", "wh")
+
+
+@pytest.fixture
+def wh_headers(wh_token):
+    """Return headers with warehouse token."""
+    return {"Authorization": f"Bearer {wh_token}"}
+
+
+@pytest.mark.asyncio
+async def test_permission_overrides_have_data_scope():
+    """permission_overrides should have data_scope column with correct defaults."""
+    db = database.get_db()
+    rows = db.execute("SELECT role, module, data_scope FROM permission_overrides").fetchall()
+    db.close()
+    assert len(rows) > 0
+    scope_map = {}
+    for r in rows:
+        scope_map.setdefault(r["role"], set()).add(r["data_scope"])
+    # Check expected data_scope values
+    assert "all" in scope_map.get("admin", set())
+    assert "all" in scope_map.get("ceo", set())
+    assert "own_supplier" in scope_map.get("sup", set())
+    assert "own_warehouse" in scope_map.get("wh", set())
+    assert "self_only" in scope_map.get("worker", set())
+
+
+@pytest.mark.asyncio
+async def test_supplier_login_includes_supplier_id():
+    """Supplier user login should return supplier_id in user info."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/login", json={"username": "sup1", "password": "sup123"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["user"]["role"] == "sup"
+    assert data["user"]["supplier_id"] == "SUP-001"
+
+
+@pytest.mark.asyncio
+async def test_wh_login_includes_warehouse_code():
+    """Warehouse user login should return warehouse_code in user info."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/login", json={"username": "wh", "password": "wh123"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["user"]["role"] == "wh"
+    assert data["user"]["warehouse_code"] == "UNA"
+
+
+@pytest.mark.asyncio
+async def test_supplier_sees_only_own_workers(sup_headers):
+    """Supplier user should only see employees from their supplier."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees", headers=sup_headers)
+    assert r.status_code == 200
+    employees = r.json()
+    # SUP-001 has workers: YB-003, YB-004, YB-009
+    assert len(employees) > 0
+    for emp in employees:
+        assert emp["supplier_id"] == "SUP-001", f"Employee {emp['id']} has supplier_id {emp.get('supplier_id')}, expected SUP-001"
+
+
+@pytest.mark.asyncio
+async def test_supplier_worker_activities(sup_headers):
+    """Supplier should be able to see their workers' activities."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/supplier/worker-activities", headers=sup_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert "workers" in data
+    assert "timesheet" in data
+    assert "leave_requests" in data
+    assert "schedules" in data
+    assert "summary" in data
+    assert data["summary"]["total_workers"] > 0
+    # All workers should belong to SUP-001
+    for w in data["workers"]:
+        assert w["id"] in ["YB-003", "YB-004", "YB-009"]
+
+
+@pytest.mark.asyncio
+async def test_supplier_worker_activities_forbidden_for_worker():
+    """Worker role should not access supplier worker activities."""
+    from app import make_token
+    token = make_token("worker1", "worker")
+    headers = {"Authorization": f"Bearer {token}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/supplier/worker-activities", headers=headers)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_admin_can_access_worker_activities(auth_headers):
+    """Admin should be able to access supplier worker activities endpoint."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/supplier/worker-activities", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert "workers" in data
+    assert "summary" in data
+
+
+@pytest.mark.asyncio
+async def test_permissions_my_includes_data_scope(auth_headers, sup_headers):
+    """GET /api/permissions/my should include data_scope and user_context."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Admin
+        r = await ac.get("/api/permissions/my", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert "user_context" in data
+        for mod, perms in data["permissions"].items():
+            assert "data_scope" in perms
+            assert perms["data_scope"] == "all"
+
+        # Supplier
+        r2 = await ac.get("/api/permissions/my", headers=sup_headers)
+        assert r2.status_code == 200
+        data2 = r2.json()
+        assert "user_context" in data2
+        assert data2["user_context"]["supplier_id"] == "SUP-001"
+
+
+@pytest.mark.asyncio
+async def test_permission_check_includes_data_scope(auth_headers):
+    """GET /api/permissions/check should include data_scope fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/check?module=employees", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert "data_scope" in data
+    assert "scope_grades" in data
+    assert "scope_departments" in data
+    assert "scope_warehouses" in data
+
+
+@pytest.mark.asyncio
+async def test_permission_update_with_data_scope(auth_headers, wh_headers):
+    """Admin should be able to update data_scope in permissions."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/permissions/update", headers=auth_headers, json={
+            "role": "wh", "module": "employees",
+            "can_view": 1, "can_create": 0, "can_edit": 0, "can_delete": 0,
+            "can_export": 0, "can_approve": 0, "can_import": 0,
+            "data_scope": "own_warehouse",
+            "scope_warehouses": "UNA,DHL"
+        })
+        assert r.status_code == 200
+
+        # Verify the update
+        r2 = await ac.get("/api/permissions/check?module=employees", headers=wh_headers)
+        assert r2.status_code == 200
+        data = r2.json()
+        assert data["data_scope"] == "own_warehouse"
+        assert data["scope_warehouses"] == "UNA,DHL"
+
+
+@pytest.mark.asyncio
+async def test_supplier_dashboard_scoped(sup_headers):
+    """Supplier dashboard should show only their workers' data."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/analytics/dashboard", headers=sup_headers)
+    assert r.status_code == 200
+    data = r.json()
+    # SUP-001 has 3 workers (YB-003, YB-004, YB-009)
+    assert data["total_emp"] == 3
+    assert data["own"] == 0  # All are supplier workers
+
+
+@pytest.mark.asyncio
+async def test_supplier_settlement_scoped(sup_headers):
+    """Supplier settlement should only show their own data."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/settlement", headers=sup_headers)
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_sup_role_enhanced_permissions():
+    """Supplier role should have enhanced view permissions for more modules."""
+    db = database.get_db()
+    sup_perms = db.execute(
+        "SELECT module, can_view FROM permission_overrides WHERE role='sup' AND can_view=1"
+    ).fetchall()
+    db.close()
+    modules_with_view = {p["module"] for p in sup_perms}
+    # Supplier should be able to view these modules
+    assert "dashboard" in modules_with_view
+    assert "employees" in modules_with_view
+    assert "timesheet" in modules_with_view
+    assert "settlement" in modules_with_view
+    assert "schedule" in modules_with_view
+    assert "leave" in modules_with_view
+    assert "safety" in modules_with_view
