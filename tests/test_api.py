@@ -314,3 +314,104 @@ async def test_audit_logging(auth_headers):
     # Should have at least one audit entry for the create
     create_logs = [l for l in logs if l.get("action") == "create" and l.get("target_table") == "employees"]
     assert len(create_logs) > 0
+
+
+# ── Warehouse Management Tests ──
+
+@pytest.mark.asyncio
+async def test_create_warehouse_validation(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouses", headers=auth_headers, json={})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_warehouse_success(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouses", headers=auth_headers,
+                          json={"code": "TEST", "name": "测试仓库", "address": "Test Addr",
+                                "tax_number": "DE999888777", "contact_person": "测试负责人",
+                                "cooperation_mode": "自营"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert r.json()["code"] == "TEST"
+
+
+@pytest.mark.asyncio
+async def test_update_warehouse(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/warehouses/UNA", headers=auth_headers,
+                         json={"tax_number": "DE111111111", "contact_person": "新负责人",
+                               "cooperation_mode": "外包"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_warehouse_new_fields(auth_headers):
+    """Test that warehouses include the new fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/warehouses", headers=auth_headers)
+    assert r.status_code == 200
+    whs = r.json()
+    assert len(whs) > 0
+    wh = whs[0]
+    assert "tax_number" in wh
+    assert "contact_person" in wh
+    assert "cooperation_mode" in wh
+
+
+# ── Enterprise Documents Tests ──
+
+@pytest.mark.asyncio
+async def test_create_enterprise_doc_validation(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/enterprise-docs", headers=auth_headers, json={})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_create_enterprise_doc_success(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/enterprise-docs", headers=auth_headers,
+                          json={"title": "测试安全手册", "category": "安全培训",
+                                "description": "测试文档", "send_to": "全员"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert "id" in r.json()
+
+
+@pytest.mark.asyncio
+async def test_get_enterprise_docs(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/enterprise-docs", headers=auth_headers)
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+    assert len(r.json()) > 0
+
+
+@pytest.mark.asyncio
+async def test_get_enterprise_docs_by_category(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/enterprise-docs?category=安全培训", headers=auth_headers)
+    assert r.status_code == 200
+    docs = r.json()
+    assert all(d["category"] == "安全培训" for d in docs)
+
+
+@pytest.mark.asyncio
+async def test_update_enterprise_doc(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/enterprise-docs/ED-001", headers=auth_headers,
+                         json={"title": "更新的安全手册", "status": "草稿"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True

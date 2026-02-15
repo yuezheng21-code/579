@@ -238,7 +238,7 @@ const T = {
     edit:'编辑',delete:'删除',export:'导出',approve:'审批',save:'保存',cancel:'取消',
     name:'姓名',grade:'职级',status:'状态',date:'日期',amount:'金额',total:'合计',
     pending:'待审批',approved:'已批准',rejected:'已拒绝',all:'全部',
-    mypage:'我的页面',accounts:'账号管理',whsalary:'仓库薪资'},
+    mypage:'我的页面',accounts:'账号管理',whsalary:'仓库薪资',warehouse:'仓库管理',docs:'企业文献'},
   en:{dashboard:'Dashboard',employees:'Employees',suppliers:'Suppliers',grades:'Grade System',performance:'Performance',
     quotation:'Quotation',files:'Employee Files',leave:'Leave Mgmt',expense:'Expense',
     timesheet:'Timesheet',container:'Container',settlement:'Settlement',schedule:'Schedule',
@@ -247,7 +247,7 @@ const T = {
     edit:'Edit',delete:'Delete',export:'Export',approve:'Approve',save:'Save',cancel:'Cancel',
     name:'Name',grade:'Grade',status:'Status',date:'Date',amount:'Amount',total:'Total',
     pending:'Pending',approved:'Approved',rejected:'Rejected',all:'All',
-    mypage:'My Page',accounts:'Accounts',whsalary:'WH Salary'},
+    mypage:'My Page',accounts:'Accounts',whsalary:'WH Salary',warehouse:'Warehouse Mgmt',docs:'Documents'},
   de:{dashboard:'Dashboard',employees:'Mitarbeiter',suppliers:'Lieferanten',grades:'Stufensystem',performance:'Leistung',
     quotation:'Angebot',files:'Personalakte',leave:'Urlaub',expense:'Spesen',
     timesheet:'Zeiterfassung',container:'Container',settlement:'Abrechnung',schedule:'Dienstplan',
@@ -256,7 +256,7 @@ const T = {
     edit:'Bearbeiten',delete:'Löschen',export:'Export',approve:'Genehmigen',save:'Speichern',cancel:'Abbrechen',
     name:'Name',grade:'Stufe',status:'Status',date:'Datum',amount:'Betrag',total:'Gesamt',
     pending:'Ausstehend',approved:'Genehmigt',rejected:'Abgelehnt',all:'Alle',
-    mypage:'Meine Seite',accounts:'Konten',whsalary:'Lager Gehalt'},
+    mypage:'Meine Seite',accounts:'Konten',whsalary:'Lager Gehalt',warehouse:'Lagerverwaltung',docs:'Dokumente'},
   vi:{dashboard:'Bảng điều khiển',employees:'Nhân viên',suppliers:'Nhà cung cấp',grades:'Hệ cấp bậc',performance:'Hiệu suất',
     quotation:'Báo giá',files:'Hồ sơ nhân sự',leave:'Nghỉ phép',expense:'Chi phí',
     timesheet:'Chấm công',container:'Container',settlement:'Quyết toán',schedule:'Lịch làm việc',
@@ -265,7 +265,7 @@ const T = {
     edit:'Sửa',delete:'Xóa',export:'Xuất',approve:'Phê duyệt',save:'Lưu',cancel:'Hủy',
     name:'Tên',grade:'Cấp bậc',status:'Trạng thái',date:'Ngày',amount:'Số tiền',total:'Tổng',
     pending:'Chờ duyệt',approved:'Đã duyệt',rejected:'Từ chối',all:'Tất cả',
-    mypage:'Trang của tôi',accounts:'Tài khoản',whsalary:'Lương kho'},
+    mypage:'Trang của tôi',accounts:'Tài khoản',whsalary:'Lương kho',warehouse:'Quản lý kho',docs:'Tài liệu'},
   ar:{dashboard:'لوحة التحكم',employees:'الموظفون',suppliers:'الموردون',grades:'نظام الدرجات',performance:'الأداء',
     quotation:'عروض الأسعار',files:'ملفات الموظفين',leave:'إدارة الإجازات',expense:'المصروفات',
     timesheet:'سجل الساعات',container:'الحاويات',settlement:'التسوية',schedule:'الجدول',
@@ -274,7 +274,7 @@ const T = {
     edit:'تعديل',delete:'حذف',export:'تصدير',approve:'اعتماد',save:'حفظ',cancel:'إلغاء',
     name:'الاسم',grade:'الدرجة',status:'الحالة',date:'التاريخ',amount:'المبلغ',total:'الإجمالي',
     pending:'قيد الانتظار',approved:'تم الاعتماد',rejected:'مرفوض',all:'الكل',
-    mypage:'صفحتي',accounts:'الحسابات',whsalary:'راتب المستودع'},
+    mypage:'صفحتي',accounts:'الحسابات',whsalary:'راتب المستودع',warehouse:'إدارة المستودعات',docs:'المستندات'},
   hu:{dashboard:'Vezérlőpult',employees:'Munkatársak',suppliers:'Beszállítók',grades:'Szint rendszer',performance:'Teljesítmény',
     quotation:'Árajánlat',files:'Személyi akták',leave:'Szabadság',expense:'Költségek',
     timesheet:'Munkaidő',container:'Konténer',settlement:'Elszámolás',schedule:'Beosztás',
@@ -283,7 +283,7 @@ const T = {
     edit:'Szerkesztés',delete:'Törlés',export:'Export',approve:'Jóváhagyás',save:'Mentés',cancel:'Mégse',
     name:'Név',grade:'Szint',status:'Állapot',date:'Dátum',amount:'Összeg',total:'Összesen',
     pending:'Függőben',approved:'Jóváhagyva',rejected:'Elutasítva',all:'Összes',
-    mypage:'Saját oldal',accounts:'Fiókok',whsalary:'Raktárbér'}
+    mypage:'Saját oldal',accounts:'Fiókok',whsalary:'Raktárbér',warehouse:'Raktárkezelés',docs:'Dokumentumok'}
 };
 const LANGS = [{c:'zh',n:'中文'},{c:'en',n:'English'},{c:'de',n:'Deutsch'},{c:'vi',n:'Tiếng Việt'},{c:'ar',n:'العربية'},{c:'hu',n:'Magyar'}];
 const LOCALE_MAP = {zh:'zh-CN',en:'en-US',de:'de-DE',vi:'vi-VN',ar:'ar-SA',hu:'hu-HU'};
@@ -875,6 +875,147 @@ const FilePage=({t})=>{
             React.createElement('div',{style:{color:'var(--text3)',marginTop:2}},`${f.category} · ${f.stage} · ${f.upload_date}`)))))));
 };
 
+// ══════ Warehouse Management ══════
+const WarehousePage=({t})=>{
+  const[whs,setWhs]=useState([]);const[showEdit,setShowEdit]=useState(null);
+  useEffect(()=>{API.get('/api/warehouses').then(setWhs);},[]);
+  const save=async()=>{
+    if(showEdit._isNew){
+      const d={...showEdit};delete d._isNew;
+      await API.post('/api/warehouses',d);
+    }else{
+      await API.put(`/api/warehouses/${showEdit.code}`,showEdit);
+    }
+    showToast('保存成功');setShowEdit(null);
+    API.get('/api/warehouses').then(setWhs);
+  };
+  const coopColors={'自营':'var(--green)','合作派遣':'var(--blue)','外包':'var(--orange)'};
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar'},
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,code:'',name:'',address:'',manager:'',phone:'',
+        tax_number:'',contact_person:'',cooperation_mode:'自营',contact_email:'',client_name:'',project_no:'',biz_line:'渊博',note:''})},'新增仓库')),
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['编码','名称','地址','负责人','电话','税号','合作方式','客户','业务线','操作'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,whs.map(w=>React.createElement('tr',{key:w.code},
+          React.createElement('td',{style:{fontWeight:700}},w.code),
+          React.createElement('td',null,w.name),
+          React.createElement('td',null,w.address||'-'),
+          React.createElement('td',null,w.contact_person||w.manager||'-'),
+          React.createElement('td',null,w.phone||'-'),
+          React.createElement('td',{style:{fontSize:11}},w.tax_number||'-'),
+          React.createElement('td',null,React.createElement('span',{style:{background:coopColors[w.cooperation_mode]||'var(--text3)',color:'#fff',padding:'2px 8px',borderRadius:4,fontSize:11}},w.cooperation_mode||'自营')),
+          React.createElement('td',null,w.client_name||'-'),
+          React.createElement('td',null,w.biz_line||'-'),
+          React.createElement('td',null,React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(w)},'编辑'))))))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增仓库':'编辑仓库'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'仓库编码'),
+            React.createElement('input',{value:showEdit.code||'',onChange:e=>setShowEdit({...showEdit,code:e.target.value}),disabled:!showEdit._isNew})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'仓库名称'),
+            React.createElement('input',{value:showEdit.name||'',onChange:e=>setShowEdit({...showEdit,name:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'地址'),
+            React.createElement('input',{value:showEdit.address||'',onChange:e=>setShowEdit({...showEdit,address:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'负责人'),
+            React.createElement('input',{value:showEdit.contact_person||'',onChange:e=>setShowEdit({...showEdit,contact_person:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'电话'),
+            React.createElement('input',{value:showEdit.phone||'',onChange:e=>setShowEdit({...showEdit,phone:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'邮箱'),
+            React.createElement('input',{value:showEdit.contact_email||'',onChange:e=>setShowEdit({...showEdit,contact_email:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'税号'),
+            React.createElement('input',{value:showEdit.tax_number||'',onChange:e=>setShowEdit({...showEdit,tax_number:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'合作方式'),
+            React.createElement('select',{value:showEdit.cooperation_mode||'自营',onChange:e=>setShowEdit({...showEdit,cooperation_mode:e.target.value})},
+              ['自营','合作派遣','外包'].map(m=>React.createElement('option',{key:m,value:m},m)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'业务线'),
+            React.createElement('select',{value:showEdit.biz_line||'渊博',onChange:e=>setShowEdit({...showEdit,biz_line:e.target.value})},
+              ['渊博','579'].map(b=>React.createElement('option',{key:b,value:b},b))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'客户名称'),
+            React.createElement('input',{value:showEdit.client_name||'',onChange:e=>setShowEdit({...showEdit,client_name:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'项目编号'),
+            React.createElement('input',{value:showEdit.project_no||'',onChange:e=>setShowEdit({...showEdit,project_no:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'备注'),
+            React.createElement('input',{value:showEdit.note||'',onChange:e=>setShowEdit({...showEdit,note:e.target.value})}))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
+};
+
+// ══════ Enterprise Documents ══════
+const DocsPage=({t})=>{
+  const[docs,setDocs]=useState([]);const[whs,setWhs]=useState([]);
+  const[selCat,setSelCat]=useState('');const[showEdit,setShowEdit]=useState(null);
+  useEffect(()=>{API.get('/api/enterprise-docs').then(setDocs);API.get('/api/warehouses').then(setWhs);},[]);
+  const categories=['安全培训','操作SOP','管理制度','通用'];
+  const filtered=selCat?docs.filter(d=>d.category===selCat):docs;
+  const save=async()=>{
+    if(showEdit.id&&!showEdit._isNew){
+      await API.put(`/api/enterprise-docs/${showEdit.id}`,showEdit);
+    }else{
+      const d={...showEdit};delete d._isNew;delete d.id;
+      await API.post('/api/enterprise-docs',d);
+    }
+    showToast('保存成功');setShowEdit(null);
+    API.get('/api/enterprise-docs').then(setDocs);
+  };
+  const catColors={'安全培训':'var(--red)','操作SOP':'var(--blue)','管理制度':'var(--orange)','通用':'var(--green)'};
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar'},
+      React.createElement('select',{value:selCat,onChange:e=>setSelCat(e.target.value),
+        style:{padding:'7px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)'}},
+        React.createElement('option',{value:''},'全部分类'),
+        categories.map(c=>React.createElement('option',{key:c,value:c},c))),
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,title:'',category:'通用',description:'',tags:'',
+        warehouse_code:'',send_to:'',status:'已发布',file_name:'',file_url:''})},'新增文档')),
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(300px,1fr))',gap:12}},
+      filtered.map(d=>React.createElement('div',{key:d.id,className:'card',style:{cursor:'pointer'},onClick:()=>setShowEdit(d)},
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+          React.createElement('span',{style:{background:catColors[d.category]||'var(--text3)',color:'#fff',padding:'2px 8px',borderRadius:4,fontSize:11}},d.category),
+          React.createElement('span',{style:{fontSize:11,color:d.status==='已发布'?'var(--green)':'var(--text3)'}},d.status)),
+        React.createElement('div',{style:{fontWeight:700,fontSize:14,marginBottom:4}},d.title),
+        React.createElement('div',{style:{fontSize:12,color:'var(--text2)',marginBottom:6}},d.description||''),
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--text3)'}},
+          React.createElement('span',null,'📤 ',d.send_to||'全员'),
+          React.createElement('span',null,d.warehouse_code?`🏭 ${d.warehouse_code}`:'通用')),
+        d.tags&&React.createElement('div',{style:{marginTop:6,display:'flex',flexWrap:'wrap',gap:4}},
+          d.tags.split(',').map(tag=>React.createElement('span',{key:tag,style:{background:'var(--bg)',padding:'1px 6px',borderRadius:3,fontSize:10,border:'1px solid var(--border)'}},tag.trim())))))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增企业文档':'编辑企业文档'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'标题'),
+            React.createElement('input',{value:showEdit.title||'',onChange:e=>setShowEdit({...showEdit,title:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'分类'),
+            React.createElement('select',{value:showEdit.category||'通用',onChange:e=>setShowEdit({...showEdit,category:e.target.value})},
+              categories.map(c=>React.createElement('option',{key:c,value:c},c)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'状态'),
+            React.createElement('select',{value:showEdit.status||'已发布',onChange:e=>setShowEdit({...showEdit,status:e.target.value})},
+              ['已发布','草稿'].map(s=>React.createElement('option',{key:s,value:s},s))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field',style:{flex:2}},React.createElement('label',null,'描述'),
+            React.createElement('input',{value:showEdit.description||'',onChange:e=>setShowEdit({...showEdit,description:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'标签(逗号分隔)'),
+            React.createElement('input',{value:showEdit.tags||'',onChange:e=>setShowEdit({...showEdit,tags:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'适用仓库'),
+            React.createElement('select',{value:showEdit.warehouse_code||'',onChange:e=>setShowEdit({...showEdit,warehouse_code:e.target.value})},
+              React.createElement('option',{value:''},'全部仓库'),
+              whs.map(w=>React.createElement('option',{key:w.code,value:w.code},`${w.code} - ${w.name}`)))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'发送对象'),
+            React.createElement('input',{value:showEdit.send_to||'',onChange:e=>setShowEdit({...showEdit,send_to:e.target.value}),placeholder:'如: 全员、装卸岗、管理层'})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'文件名'),
+            React.createElement('input',{value:showEdit.file_name||'',onChange:e=>setShowEdit({...showEdit,file_name:e.target.value})}))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
+};
+
 // ══════ Clock ══════
 const ClockPage=({lang,t})=>{
   const[time,setTime]=useState(new Date());
@@ -905,9 +1046,11 @@ const MENU = [
     {key:'container',icon:'📦',label:'装卸柜'},
     {key:'schedule',icon:'📅',label:'排班'},
     {key:'dispatch',icon:'🚛',label:'派遣需求'},
+    {key:'warehouse',icon:'🏗️',label:'仓库管理',roles:['admin','hr','mgr']},
   ]},
   {group:'人事',items:[
     {key:'files',icon:'📁',label:'人员档案'},
+    {key:'docs',icon:'📚',label:'企业文献'},
     {key:'leave',icon:'🏖️',label:'假期管理'},
     {key:'expense',icon:'💳',label:'报销审批'},
     {key:'suppliers',icon:'🏢',label:'供应商'},
@@ -939,6 +1082,7 @@ const App=()=>{
     quotation:QuotePage, files:FilePage, leave:LeavePage, expense:ExpPage,
     timesheet:TSPage, settlement:SettPage, clock:ClockPage,
     mypage:MyPage, accounts:AccountPage, whsalary:WHSalaryPage,
+    warehouse:WarehousePage, docs:DocsPage,
   };
   const PageComp=pages[page];
 

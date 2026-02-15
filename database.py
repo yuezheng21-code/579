@@ -375,7 +375,9 @@ def init_db():
         rate_20gp REAL DEFAULT 150, rate_40gp REAL DEFAULT 280, rate_45hc REAL DEFAULT 330,
         unload_20gp REAL DEFAULT 150, unload_40gp REAL DEFAULT 280, unload_45hc REAL DEFAULT 330,
         emp_cols TEXT, ts_cols TEXT, export_freq TEXT DEFAULT 'Monthly', export_lang TEXT DEFAULT 'zh',
-        created_at TEXT DEFAULT (datetime('now')))""",
+        created_at TEXT DEFAULT (datetime('now')),
+        tax_number TEXT, contact_person TEXT, cooperation_mode TEXT DEFAULT '自营',
+        contact_email TEXT, contact_phone_2 TEXT, updated_at TEXT DEFAULT (datetime('now')))""",
     # ── NEW: Warehouse Salary Config - 仓库薪资配置表 ──
     """CREATE TABLE IF NOT EXISTS warehouse_salary_config (
         id TEXT PRIMARY KEY,
@@ -490,6 +492,23 @@ def init_db():
         transfer_type TEXT DEFAULT '临时支援', biz_line TEXT,
         approver TEXT, reason TEXT, status TEXT DEFAULT '待审批', notes TEXT,
         created_at TEXT DEFAULT (datetime('now')))""",
+    # ── Enterprise Documents - 企业文献库 ──
+    """CREATE TABLE IF NOT EXISTS enterprise_documents (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT '通用',
+        file_name TEXT,
+        file_url TEXT,
+        file_type TEXT,
+        file_size INTEGER DEFAULT 0,
+        description TEXT,
+        tags TEXT,
+        warehouse_code TEXT,
+        uploaded_by TEXT,
+        send_to TEXT,
+        status TEXT DEFAULT '已发布',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')))""",
     ]
     for sql in tables:
         c.execute(_adapt_sql_for_db(sql))
@@ -670,12 +689,12 @@ def seed_data():
                 (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),""))
 
     # ── Warehouses ──
-    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de"),
-              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en"),
-              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh"),
-              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en"),
-              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de")]:
-        c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*21)+")", w+("",))
+    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","自营","una@example.com","",""),
+              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","合作派遣","dhl@example.com","",""),
+              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","自营","579@example.com","",""),
+              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","外包","cma@example.com","",""),
+              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","合作派遣","emr@example.com","","")]:
+        c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*27)+")", w)
 
     # ── NEW: Warehouse Salary Config ──
     wh_salary_configs = [
@@ -798,6 +817,17 @@ def seed_data():
                 (f"WT-{ts_id:04d}",eid,enm,src,supid,biz,dt,wh,f"{sH:02d}:00",f"{eH:02d}:00",hrs,pos,grd,settle,rate,hP,si,tx,net,
                  random.choice(["已入账","已入账","待财务确认","待仓库审批"])))
             ts_id += 1
+
+    # ── Enterprise Documents ──
+    for ed in [
+        ("ED-001","仓库安全操作手册","安全培训",None,None,"pdf",0,"仓库日常安全规范和注意事项","安全,规范",None,"admin","全员","已发布"),
+        ("ED-002","叉车操作SOP","操作SOP",None,None,"pdf",0,"叉车标准操作规程","叉车,SOP","UNA","admin","装卸岗","已发布"),
+        ("ED-003","新员工入职培训手册","安全培训",None,None,"pdf",0,"新员工入职安全培训资料","入职,培训",None,"admin","全员","已发布"),
+        ("ED-004","消防安全培训","安全培训",None,None,"pdf",0,"消防安全知识和应急处理流程","消防,安全",None,"admin","全员","已发布"),
+        ("ED-005","装卸柜标准流程","操作SOP",None,None,"pdf",0,"集装箱装卸标准操作流程","装卸,SOP","DHL","admin","装卸岗","已发布"),
+        ("ED-006","仓库管理制度","管理制度",None,None,"pdf",0,"仓库日常管理制度和考核标准","管理,制度",None,"admin","管理层","草稿"),
+    ]:
+        c.execute("INSERT INTO enterprise_documents(id,title,category,file_name,file_url,file_type,file_size,description,tags,warehouse_code,uploaded_by,send_to,status) VALUES("+",".join(["?"]*13)+")", ed)
 
     conn.commit(); conn.close()
     print("✅ DB seeded with all modules")
