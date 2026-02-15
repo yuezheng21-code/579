@@ -1409,6 +1409,157 @@ async def update_quotation(qid: str, request: Request, user=Depends(get_user)):
     audit_log(user.get("username", ""), "update", "quotation_records", qid, json.dumps(list(data.keys())))
     return {"ok": True}
 
+@app.post("/api/quotation-pdf")
+async def generate_quotation_pdf(request: Request, user=Depends(get_user)):
+    """Generate a PDF document for selected quotation records (组合报价)."""
+    body = await request.json()
+    ids = body.get("ids", [])
+    if not ids or not isinstance(ids, list):
+        raise HTTPException(400, "请选择至少一条报价记录")
+    # Sanitize: only allow expected ID format
+    for rid in ids:
+        if not isinstance(rid, str) or len(rid) > 50:
+            raise HTTPException(400, "无效的报价ID")
+    db = database.get_db()
+    placeholders = ",".join(["?"] * len(ids))
+    rows = db.execute(f"SELECT * FROM quotation_records WHERE id IN ({placeholders})", ids).fetchall()
+    db.close()
+    if not rows:
+        raise HTTPException(404, "未找到报价记录")
+    records = [dict(r) for r in rows]
+    # Fetch templates for reference
+    tpl_ids = list(set(r.get("template_id") or "" for r in records if r.get("template_id")))
+    tpl_map = {}
+    if tpl_ids:
+        db2 = database.get_db()
+        ph2 = ",".join(["?"] * len(tpl_ids))
+        tpl_rows = db2.execute(f"SELECT * FROM quotation_templates WHERE id IN ({ph2})", tpl_ids).fetchall()
+        db2.close()
+        tpl_map = {t["id"]: dict(t) for t in tpl_rows}
+
+    import io
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=20*mm, bottomMargin=15*mm,
+                            leftMargin=15*mm, rightMargin=15*mm)
+
+    # Try to register a CJK font for Chinese characters
+    font_name = "Helvetica"
+    bold_font = "Helvetica-Bold"
+    try:
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        font_name = "STSong-Light"
+        bold_font = "STSong-Light"
+    except Exception:
+        pass
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("CNTitle", parent=styles["Title"], fontName=bold_font, fontSize=18)
+    normal_style = ParagraphStyle("CNNormal", parent=styles["Normal"], fontName=font_name, fontSize=9)
+    header_style = ParagraphStyle("CNHeader", parent=styles["Normal"], fontName=bold_font, fontSize=11)
+
+    elements = []
+    elements.append(Paragraph("组合报价单", title_style))
+    elements.append(Spacer(1, 5*mm))
+
+    gen_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+    gen_user = user.get("username", "")
+    elements.append(Paragraph(f"生成日期: {gen_date}    操作人: {gen_user}    报价数量: {len(records)}", normal_style))
+    elements.append(Spacer(1, 5*mm))
+
+    # Summary table
+    header_row = ["报价号", "客户", "业务类型", "服务类型", "仓库", "人数", "单价(€)", "总额(€)", "审批状态"]
+    table_data = [header_row]
+    grand_total = 0
+    for r in records:
+        table_data.append([
+            str(r.get("id", "")),
+            str(r.get("client_name", "")),
+            str(r.get("biz_type", "")),
+            str(r.get("service_type", "")),
+            str(r.get("warehouse_code", "")),
+            str(r.get("headcount", "")),
+            str(r.get("final_price", "")),
+            str(r.get("total_amount", "")),
+            str(r.get("approve_status", "")),
+        ])
+        try:
+            grand_total += float(r.get("total_amount", 0) or 0)
+        except (ValueError, TypeError):
+            pass
+    # Add total row
+    table_data.append(["", "", "", "", "", "", "合计:", f"€{grand_total:.2f}", ""])
+
+    col_widths = [55, 55, 50, 50, 45, 30, 45, 50, 50]
+    t = Table(table_data, colWidths=col_widths)
+    t.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("FONTNAME", (0, 0), (-1, 0), bold_font),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4a90d9")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("ALIGN", (5, 0), (-1, -1), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f0f4f8")]),
+        ("FONTNAME", (0, -1), (-1, -1), bold_font),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#e8edf2")),
+    ]))
+    elements.append(t)
+    elements.append(Spacer(1, 8*mm))
+
+    # Detail sections for each record
+    for r in records:
+        elements.append(Paragraph(f"报价明细 — {r.get('id','')}", header_style))
+        elements.append(Spacer(1, 2*mm))
+        detail = [
+            ["客户名称", str(r.get("client_name", "")), "联系人", str(r.get("client_contact", ""))],
+            ["业务类型", str(r.get("biz_type", "")), "服务类型", str(r.get("service_type", ""))],
+            ["仓库", str(r.get("warehouse_code", "")), "报价日期", str(r.get("quote_date", ""))],
+            ["人数", str(r.get("headcount", "")), "预计工时", str(r.get("estimated_hours", ""))],
+            ["基础单价", f"€{r.get('base_price','0')}", "最终单价", f"€{r.get('final_price','0')}"],
+            ["总金额", f"€{r.get('total_amount','0')}", "币种", str(r.get("currency", "EUR"))],
+            ["有效期至", str(r.get("valid_until", "")), "合同编号", str(r.get("contract_no", ""))],
+            ["审核状态", str(r.get("review_status", "")), "审批状态", str(r.get("approve_status", ""))],
+        ]
+        tpl = tpl_map.get(r.get("template_id"))
+        if tpl:
+            detail.append(["报价模板", str(tpl.get("name", "")), "模板单价", f"€{tpl.get('base_price','0')}"])
+            surcharges = f"夜班+€{tpl.get('night_surcharge',0)} 周末+€{tpl.get('weekend_surcharge',0)} 节假+€{tpl.get('holiday_surcharge',0)}"
+            detail.append(["附加费", surcharges, "", ""])
+        if r.get("notes"):
+            detail.append(["备注", str(r.get("notes", "")), "", ""])
+        dt = Table(detail, colWidths=[60, 120, 60, 120])
+        dt.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("FONTNAME", (0, 0), (0, -1), bold_font),
+            ("FONTNAME", (2, 0), (2, -1), bold_font),
+            ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#4a90d9")),
+            ("TEXTCOLOR", (2, 0), (2, -1), colors.HexColor("#4a90d9")),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.lightgrey),
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f5f7fa")),
+            ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#f5f7fa")),
+        ]))
+        elements.append(dt)
+        elements.append(Spacer(1, 5*mm))
+
+    doc.build(elements)
+    pdf_bytes = buf.getvalue()
+    buf.close()
+
+    from fastapi.responses import Response
+    filename = f"quotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
 # ── Employee Files ──
 @app.get("/api/files")
 def get_files(employee_id: Optional[str] = None, user=Depends(get_user)):

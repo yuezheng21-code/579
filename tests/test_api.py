@@ -2845,3 +2845,77 @@ async def test_backup_database_function():
     assert len(data["tables"]["employees"]) > 0
     # Clean up
     shutil.rmtree(database.BACKUP_DIR, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_quotation_pdf_no_ids(auth_headers):
+    """Test quotation PDF generation rejects empty ids."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/quotation-pdf", headers=auth_headers, json={"ids": []})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_quotation_pdf_not_found(auth_headers):
+    """Test quotation PDF returns 404 for non-existent records."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/quotation-pdf", headers=auth_headers, json={"ids": ["NONEXIST"]})
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_quotation_pdf_success(auth_headers):
+    """Test quotation PDF generation with valid records."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create a quotation record first
+        r = await ac.post("/api/quotations", headers=auth_headers, json={
+            "client_name": "TestClient",
+            "biz_type": "仓储",
+            "service_type": "装卸",
+            "warehouse_code": "WH-001",
+            "headcount": 5,
+            "base_price": 15.0,
+            "final_price": 18.0,
+            "total_amount": 900.0,
+            "currency": "EUR"
+        })
+        assert r.status_code == 200
+        # Get quotation records to find the ID
+        r2 = await ac.get("/api/quotations", headers=auth_headers)
+        recs = r2.json()
+        assert len(recs) > 0
+        qid = recs[0]["id"]
+        # Generate PDF
+        r3 = await ac.post("/api/quotation-pdf", headers=auth_headers, json={"ids": [qid]})
+        assert r3.status_code == 200
+        assert r3.headers.get("content-type") == "application/pdf"
+        # Verify PDF magic bytes
+        assert r3.content[:4] == b"%PDF"
+
+
+@pytest.mark.asyncio
+async def test_quotation_pdf_multiple_records(auth_headers):
+    """Test quotation PDF with multiple selected records (组合)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create two quotation records
+        await ac.post("/api/quotations", headers=auth_headers, json={
+            "client_name": "ClientA", "biz_type": "仓储", "service_type": "分拣",
+            "headcount": 3, "final_price": 20.0, "total_amount": 480.0
+        })
+        await ac.post("/api/quotations", headers=auth_headers, json={
+            "client_name": "ClientB", "biz_type": "物流", "service_type": "配送",
+            "headcount": 8, "final_price": 25.0, "total_amount": 1600.0
+        })
+        recs = (await ac.get("/api/quotations", headers=auth_headers)).json()
+        ids = [r["id"] for r in recs]
+        assert len(ids) >= 2
+        # Generate combined PDF
+        r = await ac.post("/api/quotation-pdf", headers=auth_headers, json={"ids": ids})
+        assert r.status_code == 200
+        assert r.headers.get("content-type") == "application/pdf"
+        assert r.content[:4] == b"%PDF"
+        assert len(r.content) > 200  # PDF should have meaningful content
