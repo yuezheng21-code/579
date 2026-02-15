@@ -1023,3 +1023,73 @@ async def test_delete_invalid_table(auth_headers):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.delete("/api/audit_logs/1", headers=auth_headers)
     assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_admin_can_edit_all_modules(auth_headers):
+    """Admin (system administrator) should have can_edit=1 for ALL modules."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["is_admin"] is True
+    for module, perms in data["permissions"].items():
+        assert perms["can_edit"] == 1, f"Admin missing can_edit on module: {module}"
+
+
+@pytest.mark.asyncio
+async def test_admin_can_update_permission_matrix(auth_headers):
+    """Admin should be able to update permissions for other roles via the permission matrix."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Update worker's employees module to allow editing
+        r = await ac.post("/api/permissions/update", headers=auth_headers,
+                          json={"role": "worker", "module": "employees",
+                                "can_view": 1, "can_create": 0, "can_edit": 1,
+                                "can_delete": 0, "can_export": 0, "can_approve": 0, "can_import": 0})
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        # Verify the update was applied
+        r2 = await ac.get("/api/permissions", headers=auth_headers)
+        assert r2.status_code == 200
+        perms = r2.json()
+        worker_emp = [p for p in perms if p["role"] == "worker" and p["module"] == "employees"]
+        assert len(worker_emp) == 1
+        assert worker_emp[0]["can_edit"] == 1
+        assert worker_emp[0]["can_view"] == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_check_edit_permission_per_module(auth_headers):
+    """Admin should have can_edit=1 when checking specific modules."""
+    transport = ASGITransport(app=app)
+    modules_to_check = ["employees", "suppliers", "admin", "settlement", "warehouse"]
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        for mod in modules_to_check:
+            r = await ac.get(f"/api/permissions/check?module={mod}", headers=auth_headers)
+            assert r.status_code == 200
+            data = r.json()
+            assert data["can_edit"] == 1, f"Admin missing can_edit on check for module: {mod}"
+
+
+@pytest.mark.asyncio
+async def test_all_modules_have_permissions_seeded():
+    """All 25 modules should have permission_overrides for every role."""
+    ALL_MODULES = [
+        "dashboard", "employees", "suppliers", "talent", "dispatch", "recruit",
+        "timesheet", "settlement", "warehouse", "schedule", "templates",
+        "clock", "container", "messages", "analytics", "admin", "logs",
+        "grades", "quotation", "files", "leave", "expense", "performance",
+        "mypage", "accounts", "whsalary"
+    ]
+    ALL_ROLES = ["admin", "ceo", "hr", "wh", "fin", "sup", "mgr", "worker"]
+    db = database.get_db()
+    for role in ALL_ROLES:
+        for mod in ALL_MODULES:
+            row = db.execute(
+                "SELECT * FROM permission_overrides WHERE role=? AND module=?",
+                (role, mod)
+            ).fetchone()
+            assert row is not None, f"Missing permission_overrides for role={role}, module={mod}"
+    db.close()

@@ -1029,6 +1029,157 @@ const ClockPage=({lang,t})=>{
       `🕐 ${t.clock}`));
 };
 
+// ══════ Suppliers Page ══════
+const SuppliersPage=({t})=>{
+  const[sups,setSups]=useState([]);const[showEdit,setShowEdit]=useState(null);
+  useEffect(()=>{API.get('/api/suppliers').then(setSups)},[]);
+  const save=async()=>{
+    if(showEdit._isNew){
+      const d={...showEdit};delete d._isNew;
+      await API.post('/api/suppliers',d);
+    }else{
+      await API.put(`/api/suppliers/${showEdit.id}`,showEdit);
+    }
+    showToast('保存成功');setShowEdit(null);
+    API.get('/api/suppliers').then(setSups);
+  };
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'search-bar'},
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,name:'',type:'人力供应商',biz_line:'渊博',contact_name:'',contact_phone:'',contact_email:'',address:'',status:'合作中'})},'新增供应商')),
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['编号','名称','类型','业务线','联系人','电话','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,sups.map(s=>React.createElement('tr',{key:s.id},
+          React.createElement('td',null,s.id),React.createElement('td',{style:{fontWeight:700}},s.name),
+          React.createElement('td',null,s.type||'-'),React.createElement('td',null,s.biz_line||'-'),
+          React.createElement('td',null,s.contact_name||'-'),React.createElement('td',null,s.contact_phone||'-'),
+          React.createElement('td',null,React.createElement(SBadge,{s:s.status||'合作中'})),
+          React.createElement('td',null,React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>setShowEdit(s)},'编辑'))))))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增供应商':'编辑供应商'),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'名称'),
+            React.createElement('input',{value:showEdit.name||'',onChange:e=>setShowEdit({...showEdit,name:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'类型'),
+            React.createElement('input',{value:showEdit.type||'',onChange:e=>setShowEdit({...showEdit,type:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'业务线'),
+            React.createElement('select',{value:showEdit.biz_line||'渊博',onChange:e=>setShowEdit({...showEdit,biz_line:e.target.value})},
+              ['渊博','579'].map(b=>React.createElement('option',{key:b,value:b},b))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'联系人'),
+            React.createElement('input',{value:showEdit.contact_name||'',onChange:e=>setShowEdit({...showEdit,contact_name:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'电话'),
+            React.createElement('input',{value:showEdit.contact_phone||'',onChange:e=>setShowEdit({...showEdit,contact_phone:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'邮箱'),
+            React.createElement('input',{value:showEdit.contact_email||'',onChange:e=>setShowEdit({...showEdit,contact_email:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'地址'),
+            React.createElement('input',{value:showEdit.address||'',onChange:e=>setShowEdit({...showEdit,address:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'状态'),
+            React.createElement('select',{value:showEdit.status||'合作中',onChange:e=>setShowEdit({...showEdit,status:e.target.value})},
+              ['合作中','已终止'].map(s=>React.createElement('option',{key:s,value:s},s))))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
+};
+
+// ══════ Container Page ══════
+const ContainerPage=({t})=>{
+  const[recs,setRecs]=useState([]);
+  useEffect(()=>{API.get('/api/containers').then(setRecs)},[]);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['编号','柜号','日期','仓库','柜型','类型','组号','人数','时长(分)','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,recs.map(r=>React.createElement('tr',{key:r.id},
+          React.createElement('td',null,r.id),React.createElement('td',{style:{fontWeight:700}},r.container_no||'-'),
+          React.createElement('td',null,r.work_date||'-'),React.createElement('td',null,r.warehouse_code||'-'),
+          React.createElement('td',null,r.container_type||'40GP'),React.createElement('td',null,r.load_type||'卸柜'),
+          React.createElement('td',null,r.team_no||'-'),React.createElement('td',null,r.team_size||0),
+          React.createElement('td',null,r.duration_minutes||0),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.wh_status||'待审核'}))))))));
+};
+
+// ══════ Schedule Page ══════
+const SchedulePage=({t})=>{
+  const[rows,setRows]=useState([]);
+  useEffect(()=>{API.get('/api/schedules').then(setRows)},[]);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['编号','员工','仓库','日期','班次','开始','结束','岗位','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,rows.map(r=>React.createElement('tr',{key:r.id},
+          React.createElement('td',null,r.id),React.createElement('td',{style:{fontWeight:700}},r.employee_name||'-'),
+          React.createElement('td',null,r.warehouse_code||'-'),React.createElement('td',null,r.work_date||'-'),
+          React.createElement('td',null,r.shift||'白班'),React.createElement('td',null,r.start_time||'-'),
+          React.createElement('td',null,r.end_time||'-'),React.createElement('td',null,r.position||'-'),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.status||'已排班'}))))))));
+};
+
+// ══════ Dispatch Page ══════
+const DispatchPage=({t})=>{
+  const[rows,setRows]=useState([]);
+  useEffect(()=>{API.get('/api/dispatch').then(setRows)},[]);
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          ['编号','仓库','岗位','需求人数','已匹配','开始','结束','优先级','状态'].map(h=>React.createElement('th',{key:h},h)))),
+        React.createElement('tbody',null,rows.map(r=>React.createElement('tr',{key:r.id},
+          React.createElement('td',null,r.id),React.createElement('td',{style:{fontWeight:700}},r.warehouse_code||'-'),
+          React.createElement('td',null,r.position||'-'),React.createElement('td',null,r.headcount||0),
+          React.createElement('td',null,r.matched_count||0),React.createElement('td',null,r.start_date||'-'),
+          React.createElement('td',null,r.end_date||'-'),
+          React.createElement('td',null,React.createElement('span',{style:{color:r.priority==='高'?'var(--red)':r.priority==='中'?'var(--yellow)':'var(--text2)',fontWeight:700}},r.priority||'中')),
+          React.createElement('td',null,React.createElement(SBadge,{s:r.status||'待处理'}))))))));
+};
+
+// ══════ Admin (Permission Management) Page ══════
+const AdminPage=({t,user})=>{
+  const[perms,setPerms]=useState([]);const[roles,setRoles]=useState([]);
+  const[selRole,setSelRole]=useState('');const[saving,setSaving]=useState(false);
+  const PERM_KEYS=['can_view','can_create','can_edit','can_delete','can_export','can_approve','can_import'];
+  const PERM_LABELS=['查看','新建','编辑','删除','导出','审批','导入'];
+  useEffect(()=>{
+    API.get('/api/roles').then(r=>{setRoles(r);if(r.length)setSelRole(r[0].role)});
+    API.get('/api/permissions').then(setPerms);
+  },[]);
+  const rolePerms=perms.filter(p=>p.role===selRole);
+  const toggle=async(mod,key)=>{
+    const p=rolePerms.find(r=>r.module===mod);
+    if(!p)return;
+    const nv={...p,[key]:p[key]?0:1};
+    setSaving(true);
+    try{
+      await API.post('/api/permissions/update',{role:selRole,module:mod,...nv});
+      const updated=await API.get('/api/permissions');
+      setPerms(updated);showToast('权限已更新');
+    }catch(e){showToast('更新失败: '+(e.message||''));}
+    setSaving(false);
+  };
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'tabs',style:{marginBottom:12}},
+      roles.map(r=>React.createElement('div',{key:r.role,className:`tab ${selRole===r.role?'active':''}`,
+        onClick:()=>setSelRole(r.role)},r.label+' ('+r.role+')'))),
+    React.createElement('div',{style:{fontSize:12,color:'var(--text3)',marginBottom:8}},
+      selRole==='admin'?'⚡ 管理员拥有上帝视角 - 所有权限自动开启，无需手动配置':'点击单元格切换权限'),
+    React.createElement('div',{className:'table-wrap'},
+      React.createElement('table',null,
+        React.createElement('thead',null,React.createElement('tr',null,
+          React.createElement('th',null,'模块'),
+          PERM_LABELS.map(l=>React.createElement('th',{key:l,style:{textAlign:'center'}},l)))),
+        React.createElement('tbody',null,rolePerms.map(p=>React.createElement('tr',{key:p.module},
+          React.createElement('td',{style:{fontWeight:600}},t[p.module]||p.module),
+          PERM_KEYS.map((k,i)=>React.createElement('td',{key:k,style:{textAlign:'center',cursor:selRole==='admin'?'default':'pointer',
+            background:p[k]?'rgba(34,197,94,0.1)':'transparent'},
+            onClick:()=>selRole!=='admin'&&toggle(p.module,k)},
+            React.createElement('span',{style:{fontSize:16}},p[k]?'✅':'❌')))))))));
+};
+
 // ══════ Main App ══════
 const MENU = [
   {group:'个人',items:[
@@ -1083,6 +1234,8 @@ const App=()=>{
     timesheet:TSPage, settlement:SettPage, clock:ClockPage,
     mypage:MyPage, accounts:AccountPage, whsalary:WHSalaryPage,
     warehouse:WarehousePage, docs:DocsPage,
+    suppliers:SuppliersPage, container:ContainerPage, schedule:SchedulePage,
+    dispatch:DispatchPage, admin:AdminPage,
   };
   const PageComp=pages[page];
 
