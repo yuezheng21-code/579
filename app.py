@@ -1,5 +1,5 @@
 """渊博+579 HR V6 — FastAPI Backend (Enhanced with Account Management & Warehouse Salary)"""
-import os, json, uuid, shutil, secrets, string, traceback, threading
+import os, json, uuid, shutil, secrets, string, traceback, threading, logging, sys, copy
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
@@ -43,6 +43,10 @@ def on_startup():
             traceback.print_exc()
 
     threading.Thread(target=_init_database, daemon=True).start()
+
+@app.on_event("shutdown")
+def on_shutdown():
+    logging.getLogger("uvicorn.error").info("Application shutting down gracefully")
 
 import hashlib, time, hmac, base64
 
@@ -990,5 +994,13 @@ def spa(path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8080))
+
+    # Configure uvicorn logging to use stdout instead of stderr.
+    # This prevents deployment platforms (e.g., Railway) from tagging
+    # INFO-level lifecycle messages (startup/shutdown) as errors.
+    log_config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    log_config["handlers"]["default"]["stream"] = "ext://sys.stdout"
+    log_config["handlers"]["access"]["stream"] = "ext://sys.stdout"
+
+    uvicorn.run(app, host="0.0.0.0", port=port, log_config=log_config)

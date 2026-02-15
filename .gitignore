@@ -1,6 +1,8 @@
 *.pyc
 __pycache__/
 *.db
+*.db-shm
+*.db-wal
 .env
 /uploads/*
 !/uploads/.gitkeep

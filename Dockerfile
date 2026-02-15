@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r re
 
 COPY . .
 
-CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["sh", "-c", "exec python app.py"]
