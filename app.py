@@ -534,10 +534,57 @@ def get_roster_stats(user=Depends(get_user)):
             "work_permit_expiring_soon": [dict(r) for r in db.execute(
                 "SELECT id, name, work_permit_expiry, nationality FROM employees WHERE status='在职' AND work_permit_expiry IS NOT NULL AND work_permit_expiry <= date('now', '+90 days') ORDER BY work_permit_expiry ASC"
             ).fetchall()],
+            "id_expiring_soon": [dict(r) for r in db.execute(
+                "SELECT id, name, id_type, id_number, id_expiry_date, nationality FROM employees WHERE status='在职' AND id_expiry_date IS NOT NULL AND id_expiry_date <= date('now', '+90 days') ORDER BY id_expiry_date ASC"
+            ).fetchall()],
         }
     finally:
         db.close()
     return stats
+
+@app.get("/api/expiry-warnings")
+def get_expiry_warnings(user=Depends(get_user)):
+    """获取所有即将到期的证件和工作许可预警（三个月内）"""
+    db = database.get_db()
+    try:
+        warnings = []
+        # Work permit expiry
+        rows = db.execute(
+            "SELECT id, name, work_permit_no, work_permit_expiry, nationality, primary_wh FROM employees "
+            "WHERE status='在职' AND work_permit_expiry IS NOT NULL AND work_permit_expiry <= date('now', '+90 days') "
+            "ORDER BY work_permit_expiry ASC"
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            d["warning_type"] = "work_permit"
+            d["expiry_date"] = d["work_permit_expiry"]
+            warnings.append(d)
+        # ID document expiry
+        rows = db.execute(
+            "SELECT id, name, id_type, id_number, id_expiry_date, nationality, primary_wh FROM employees "
+            "WHERE status='在职' AND id_expiry_date IS NOT NULL AND id_expiry_date <= date('now', '+90 days') "
+            "ORDER BY id_expiry_date ASC"
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            d["warning_type"] = "id_document"
+            d["expiry_date"] = d["id_expiry_date"]
+            warnings.append(d)
+        # Contract expiry
+        rows = db.execute(
+            "SELECT id, name, contract_end, primary_wh FROM employees "
+            "WHERE status='在职' AND contract_end IS NOT NULL AND contract_end <= date('now', '+90 days') "
+            "ORDER BY contract_end ASC"
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            d["warning_type"] = "contract"
+            d["expiry_date"] = d["contract_end"]
+            warnings.append(d)
+    finally:
+        db.close()
+    warnings.sort(key=lambda x: x.get("expiry_date") or "9999-12-31")
+    return warnings
 
 # ── Account Management ──
 @app.get("/api/accounts")
@@ -1603,10 +1650,119 @@ async def generate_quotation_pdf(request: Request, user=Depends(get_user)):
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 # ── Employee Files ──
+
+# Roles that can view all employee files
+_FILE_FULL_ACCESS_ROLES = {"admin", "ceo", "hr", "hr_manager", "hr_assistant", "hr_specialist",
+                            "fin", "fin_director", "fin_assistant", "fin_specialist",
+                            "regional_mgr", "ops_director"}
+
+def _can_access_employee_files(user, target_employee_id: str) -> bool:
+    """Check if user can access files for a given employee.
+    - admin/ceo/hr/finance roles: full access
+    - P8-P9 grade employees: full access
+    - P5-P7 ops roles: access files of employees in their warehouse
+    - workers: own files only
+    """
+    role = user.get("role", "worker")
+    if role in _FILE_FULL_ACCESS_ROLES:
+        return True
+    # Check grade-based access (P8-P9)
+    emp_id = user.get("employee_id")
+    if emp_id:
+        db = database.get_db()
+        try:
+            emp = db.execute("SELECT grade, primary_wh FROM employees WHERE id=?", (emp_id,)).fetchone()
+            if emp:
+                grade = (emp["grade"] or "P1").upper()
+                grade_num = int(grade.replace("P", "").replace("M", "")) if grade[0] in ("P", "M") else 0
+                if grade_num >= 8:
+                    return True
+                # P5-P7: can access files of employees in their warehouse
+                if grade_num >= 5 and emp["primary_wh"]:
+                    target = db.execute("SELECT primary_wh FROM employees WHERE id=?", (target_employee_id,)).fetchone()
+                    if target and target["primary_wh"] == emp["primary_wh"]:
+                        return True
+        finally:
+            db.close()
+    # Warehouse managers: employees in their warehouse
+    if role in ("wh", "site_mgr", "shift_leader", "deputy_mgr") and user.get("warehouse_code"):
+        db = database.get_db()
+        try:
+            target = db.execute("SELECT primary_wh FROM employees WHERE id=?", (target_employee_id,)).fetchone()
+            if target and target["primary_wh"] == user["warehouse_code"]:
+                return True
+        finally:
+            db.close()
+    # Worker: own files only
+    if user.get("employee_id") == target_employee_id:
+        return True
+    return False
+
 @app.get("/api/files")
 def get_files(employee_id: Optional[str] = None, user=Depends(get_user)):
-    if employee_id: return q("employee_files", "employee_id=?", (employee_id,))
-    return q("employee_files")
+    """获取员工文件列表，权限控制：
+    - 员工只能看自己的文件
+    - 财务/人事可以看所有人
+    - 运营P5-P7看所在仓库人员
+    - P8-P9和CEO可以看所有人
+    """
+    role = user.get("role", "worker")
+    # Full access roles get all files
+    if role in _FILE_FULL_ACCESS_ROLES:
+        if employee_id:
+            return q("employee_files", "employee_id=?", (employee_id,))
+        return q("employee_files")
+    # Check grade-based full access (P8-P9)
+    emp_id = user.get("employee_id")
+    if emp_id:
+        db = database.get_db()
+        try:
+            emp = db.execute("SELECT grade FROM employees WHERE id=?", (emp_id,)).fetchone()
+            if emp:
+                grade = (emp["grade"] or "P1").upper()
+                grade_num = int(grade.replace("P", "").replace("M", "")) if grade[0] in ("P", "M") else 0
+                if grade_num >= 8:
+                    if employee_id:
+                        return q("employee_files", "employee_id=?", (employee_id,))
+                    return q("employee_files")
+        finally:
+            db.close()
+    # If specific employee_id requested, check access
+    if employee_id:
+        if not _can_access_employee_files(user, employee_id):
+            raise HTTPException(403, "无权访问该员工文件")
+        return q("employee_files", "employee_id=?", (employee_id,))
+    # For warehouse-scoped roles, return files of their warehouse employees
+    wh_code = user.get("warehouse_code")
+    if wh_code and role in ("wh", "site_mgr", "shift_leader", "deputy_mgr"):
+        db = database.get_db()
+        try:
+            rows = db.execute(
+                "SELECT ef.* FROM employee_files ef JOIN employees e ON ef.employee_id=e.id WHERE e.primary_wh=?",
+                (wh_code,)).fetchall()
+        finally:
+            db.close()
+        return [dict(r) for r in rows]
+    # P5-P7 with warehouse: return warehouse files
+    if emp_id:
+        db = database.get_db()
+        try:
+            emp = db.execute("SELECT grade, primary_wh FROM employees WHERE id=?", (emp_id,)).fetchone()
+            if emp:
+                grade = (emp["grade"] or "P1").upper()
+                grade_num = int(grade.replace("P", "").replace("M", "")) if grade[0] in ("P", "M") else 0
+                if grade_num >= 5 and emp["primary_wh"]:
+                    rows = db.execute(
+                        "SELECT ef.* FROM employee_files ef JOIN employees e ON ef.employee_id=e.id WHERE e.primary_wh=?",
+                        (emp["primary_wh"],)).fetchall()
+                    db.close()
+                    return [dict(r) for r in rows]
+        finally:
+            db.close()
+    # Default: worker sees own files only
+    if emp_id:
+        return q("employee_files", "employee_id=?", (emp_id,))
+    return []
 
 @app.post("/api/files")
 async def create_file_rec(request: Request, user=Depends(get_user)):
@@ -1623,6 +1779,58 @@ async def create_file_rec(request: Request, user=Depends(get_user)):
         raise HTTPException(500, f"创建文件记录失败: {str(e)}")
     audit_log(user.get("username", ""), "create", "employee_files", data["id"], f"员工: {data.get('employee_id','')}")
     return {"ok": True}
+
+@app.get("/api/files/{file_id}/download")
+def download_single_file(file_id: str, user=Depends(get_user)):
+    """下载单个员工文件"""
+    db = database.get_db()
+    try:
+        f = db.execute("SELECT * FROM employee_files WHERE id=?", (file_id,)).fetchone()
+    finally:
+        db.close()
+    if not f:
+        raise HTTPException(404, "文件不存在")
+    f = dict(f)
+    if not _can_access_employee_files(user, f["employee_id"]):
+        raise HTTPException(403, "无权下载该文件")
+    file_url = f.get("file_url", "")
+    if file_url.startswith("/uploads/"):
+        file_path = os.path.join(UPLOAD_DIR, file_url.replace("/uploads/", "", 1))
+        if os.path.isfile(file_path):
+            return FileResponse(file_path, filename=f.get("file_name") or os.path.basename(file_path))
+    raise HTTPException(404, "文件未找到或已被删除")
+
+@app.get("/api/files/download-folder/{employee_id}")
+def download_employee_folder(employee_id: str, user=Depends(get_user)):
+    """打包下载某员工的所有文件（ZIP格式）"""
+    import zipfile, io
+    if not _can_access_employee_files(user, employee_id):
+        raise HTTPException(403, "无权下载该员工文件")
+    db = database.get_db()
+    try:
+        files = db.execute("SELECT * FROM employee_files WHERE employee_id=?", (employee_id,)).fetchall()
+        emp = db.execute("SELECT name FROM employees WHERE id=?", (employee_id,)).fetchone()
+    finally:
+        db.close()
+    if not files:
+        raise HTTPException(404, "该员工没有文件")
+    emp_name = dict(emp)["name"] if emp else employee_id
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in files:
+            f = dict(f)
+            file_url = f.get("file_url", "")
+            if file_url.startswith("/uploads/"):
+                file_path = os.path.join(UPLOAD_DIR, file_url.replace("/uploads/", "", 1))
+                if os.path.isfile(file_path):
+                    arcname = f.get("file_name") or os.path.basename(file_path)
+                    zf.write(file_path, arcname)
+    buf.seek(0)
+    zip_bytes = buf.getvalue()
+    from fastapi.responses import Response
+    filename = f"{emp_name}_{employee_id}_files.zip"
+    return Response(content=zip_bytes, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 # ── Leave ──
 @app.get("/api/leave-types")
@@ -2488,7 +2696,7 @@ def _enforce_editable_fields(data: dict, role: str, module: str) -> dict:
 # Field definitions for each exportable table (column order for import/export)
 TABLE_EXPORT_FIELDS = {
     "employees": ["id","name","phone","email","nationality","gender","birth_date","id_type","id_number",
-                   "address","source","supplier_id","biz_line","department","primary_wh","dispatch_whs",
+                   "id_expiry_date","address","source","supplier_id","biz_line","department","primary_wh","dispatch_whs",
                    "position","grade","wage_level","settle_method","base_salary","hourly_rate",
                    "contract_type","dispatch_type","contract_start","contract_end",
                    "emergency_contact","emergency_phone","work_permit_no","work_permit_expiry",
@@ -2531,7 +2739,8 @@ MODULE_MAP = {"employees": "employees", "suppliers": "suppliers", "timesheet": "
 # Chinese labels for export template headers
 TABLE_FIELD_LABELS = {
     "employees": {"id":"工号","name":"姓名","phone":"电话","email":"邮箱","nationality":"国籍","gender":"性别",
-                   "birth_date":"出生日期","id_type":"证件类型","id_number":"证件号码","address":"地址",
+                   "birth_date":"出生日期","id_type":"证件类型","id_number":"证件号码","id_expiry_date":"证件有效期",
+                   "address":"地址",
                    "source":"来源","supplier_id":"供应商ID","biz_line":"业务线","department":"部门",
                    "primary_wh":"主仓库","dispatch_whs":"派遣仓库","position":"岗位","grade":"职级",
                    "wage_level":"薪级","settle_method":"结算方式","base_salary":"基本工资","hourly_rate":"时薪",
@@ -2749,6 +2958,144 @@ async def import_table(table: str, request: Request, user=Depends(get_user)):
         db.close()
     audit_log(user.get("username", ""), "import", table, f"batch_{success}",
               f"导入{success}条, 失败{len(errors)}条")
+    return {"ok": True, "success": success, "errors": errors, "total": len(records)}
+
+@app.post("/api/import-file/{table}")
+async def import_file_table(table: str, file: UploadFile = File(...), user=Depends(get_user)):
+    """批量导入：支持CSV和Excel文件上传导入。
+    CSV文件需要UTF-8编码，表头使用中文标签或英文字段名。
+    Excel文件需要.xlsx格式。"""
+    import csv, io
+    if table not in TABLE_EXPORT_FIELDS:
+        raise HTTPException(400, f"不支持导入的表: {table}")
+    module = MODULE_MAP.get(table, table)
+    if not _check_permission(user, module, "can_import"):
+        raise HTTPException(403, "无导入权限")
+
+    content = await file.read()
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+
+    fields = TABLE_EXPORT_FIELDS[table]
+    labels = TABLE_FIELD_LABELS.get(table, {})
+    # Build reverse label map (Chinese label -> field name)
+    label_to_field = {}
+    for f in fields:
+        label_to_field[f] = f
+        if f in labels:
+            label_to_field[labels[f]] = f
+
+    records = []
+    if ext in (".csv", ".tsv", ".txt"):
+        # Try to decode as UTF-8 with BOM, fallback to utf-8
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("utf-8", errors="replace")
+        reader = csv.DictReader(io.StringIO(text))
+        for row in reader:
+            record = {}
+            for header, value in row.items():
+                if header is None:
+                    continue
+                field = label_to_field.get(header.strip(), header.strip())
+                if field in fields:
+                    record[field] = value.strip() if value else ""
+            if record:
+                records.append(record)
+    elif ext in (".xlsx", ".xls"):
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(400, "服务器未安装openpyxl，请使用CSV格式导入")
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
+        ws = wb.active
+        rows_iter = ws.iter_rows(values_only=True)
+        header_row = next(rows_iter, None)
+        if not header_row:
+            raise HTTPException(400, "Excel文件为空")
+        # Map headers to field names
+        col_map = []
+        for h in header_row:
+            h_str = str(h).strip() if h else ""
+            col_map.append(label_to_field.get(h_str, h_str))
+        for row in rows_iter:
+            record = {}
+            for i, value in enumerate(row):
+                if i < len(col_map) and col_map[i] in fields:
+                    record[col_map[i]] = str(value).strip() if value is not None else ""
+            if record and any(v for v in record.values()):
+                records.append(record)
+        wb.close()
+    else:
+        raise HTTPException(400, "不支持的文件格式，请使用CSV(.csv)或Excel(.xlsx)文件")
+
+    if not records:
+        raise HTTPException(400, "文件中没有有效数据")
+
+    # Reuse the same import logic as JSON import
+    id_col = "code" if table == "warehouses" else "id"
+    success = 0
+    errors = []
+    db = database.get_db()
+    try:
+        for i, record in enumerate(records):
+            try:
+                if id_col not in record or not record[id_col]:
+                    if table == "employees":
+                        record["id"] = f"YB-{uuid.uuid4().hex[:6].upper()}"
+                    elif table == "suppliers":
+                        record["id"] = f"SUP-{uuid.uuid4().hex[:4].upper()}"
+                    elif table == "timesheet":
+                        record["id"] = f"WT-{uuid.uuid4().hex[:8]}"
+                    elif table == "leave_requests":
+                        record["id"] = f"LR-{uuid.uuid4().hex[:6]}"
+                    elif table == "expense_claims":
+                        record["id"] = f"EC-{uuid.uuid4().hex[:6]}"
+                    elif table == "performance_reviews":
+                        record["id"] = f"PR-{uuid.uuid4().hex[:6]}"
+                    elif table == "container_records":
+                        record["id"] = f"CT-{uuid.uuid4().hex[:6]}"
+                    elif table == "schedules":
+                        record["id"] = f"SC-{uuid.uuid4().hex[:6]}"
+                    elif table == "dispatch_needs":
+                        record["id"] = f"DN-{uuid.uuid4().hex[:6]}"
+                now = datetime.now().isoformat()
+                record.setdefault("created_at", now)
+                _tables_with_updated_at = {"employees", "suppliers", "timesheet", "warehouses",
+                                           "leave_requests", "expense_claims", "performance_reviews"}
+                if table in _tables_with_updated_at:
+                    record.setdefault("updated_at", now)
+                if table == "employees" and not record.get("name"):
+                    errors.append({"row": i, "error": "员工姓名不能为空"})
+                    continue
+                if table == "suppliers" and not record.get("name"):
+                    errors.append({"row": i, "error": "供应商名称不能为空"})
+                    continue
+                existing = db.execute(f"SELECT {id_col} FROM {table} WHERE {id_col}=?",
+                                      (record[id_col],)).fetchone()
+                if existing:
+                    update_data = {k: v for k, v in record.items() if k != id_col}
+                    if table in _tables_with_updated_at:
+                        update_data["updated_at"] = now
+                    sets = ",".join(f"{k}=?" for k in update_data.keys())
+                    db.execute(f"UPDATE {table} SET {sets} WHERE {id_col}=?",
+                               list(update_data.values()) + [record[id_col]])
+                else:
+                    cols = ",".join(record.keys())
+                    phs = ",".join(["?"] * len(record))
+                    db.execute(f"INSERT INTO {table}({cols}) VALUES({phs})", list(record.values()))
+                success += 1
+            except Exception as e:
+                errors.append({"row": i, "error": str(e)})
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"导入失败: {str(e)}")
+    finally:
+        db.close()
+    audit_log(user.get("username", ""), "import_file", table, f"batch_{success}",
+              f"文件导入{success}条, 失败{len(errors)}条, 来源: {filename}")
     return {"ok": True, "success": success, "errors": errors, "total": len(records)}
 
 # ── Update/Delete endpoints for remaining tables ──

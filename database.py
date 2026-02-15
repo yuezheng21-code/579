@@ -380,6 +380,7 @@ def init_db():
         contract_end TEXT,                       -- 合同结束日期
         emergency_contact TEXT,                  -- 紧急联系人
         emergency_phone TEXT,                    -- 紧急联系人电话
+        id_expiry_date TEXT,                     -- 证件有效期到期日
         work_permit_no TEXT,                     -- 工作许可证号
         work_permit_expiry TEXT,                 -- 工作许可证到期日
         work_hours_per_week REAL DEFAULT 40,     -- 每周工作小时数
@@ -694,7 +695,17 @@ def init_db():
     ]
     for sql in tables:
         c.execute(_adapt_sql_for_db(sql))
-    
+
+    # ── Schema migrations for existing databases ──
+    _migrations = [
+        "ALTER TABLE employees ADD COLUMN id_expiry_date TEXT",
+    ]
+    for m in _migrations:
+        try:
+            c.execute(_adapt_sql_for_db(m))
+        except Exception:
+            pass  # Column likely already exists
+
     # Create indexes for better performance and data integrity
     indexes = [
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_timesheet_unique ON timesheet(employee_id, work_date, warehouse_code)",
