@@ -1755,7 +1755,6 @@ def get_files(employee_id: Optional[str] = None, user=Depends(get_user)):
                     rows = db.execute(
                         "SELECT ef.* FROM employee_files ef JOIN employees e ON ef.employee_id=e.id WHERE e.primary_wh=?",
                         (emp["primary_wh"],)).fetchall()
-                    db.close()
                     return [dict(r) for r in rows]
         finally:
             db.close()
