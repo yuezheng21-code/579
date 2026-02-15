@@ -1705,7 +1705,7 @@ def _get_region_warehouses(warehouse_code: str) -> list:
     finally:
         db.close()
 
-def _check_grade_data_scope(user: dict, target_warehouse: str = None) -> str:
+def _check_grade_data_scope(user: dict) -> str:
     """Determine data access scope based on employee grade.
     Returns: 'all', 'regional', 'own_warehouse', 'self_only'.
     For roles admin/ceo/hr/fin, always returns 'all' (bypasses grade check).
