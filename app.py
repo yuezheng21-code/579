@@ -143,7 +143,9 @@ ALLOWED_TABLES = {
     "grade_levels", "grade_evaluations", "promotion_applications",
     "bonus_applications", "quotation_templates", "quotation_records",
     "employee_files", "leave_types", "talent_pool", "recruit_progress",
-    "schedules", "messages", "permission_overrides", "enterprise_documents"
+    "schedules", "messages", "permission_overrides", "enterprise_documents",
+    "safety_incidents", "id_naming_rules", "payslips", "payroll_confirmations",
+    "dispatch_transfers"
 }
 
 # Table-specific allowed order columns for validation
@@ -178,6 +180,11 @@ TABLE_ORDER_COLUMNS = {
     "messages": ["id", "created_at", "timestamp"],
     "permission_overrides": ["id", "role", "module"],
     "enterprise_documents": ["id", "created_at", "updated_at", "category", "title"],
+    "safety_incidents": ["id", "created_at", "updated_at", "incident_date", "status"],
+    "id_naming_rules": ["id", "updated_at"],
+    "payslips": ["id", "created_at", "month", "employee_id"],
+    "payroll_confirmations": ["id", "created_at", "month"],
+    "dispatch_transfers": ["id", "created_at", "dispatch_date"],
 }
 
 def _validate_table_name(table: str):
@@ -2052,8 +2059,10 @@ async def employee_self_register(request: Request):
         pad = rule["padding"]
         eid = f"{prefix}{sep}{str(next_num).zfill(pad)}"
         db.execute("UPDATE id_naming_rules SET next_number=? WHERE id='default'", (next_num + 1,))
+        db.commit()
     else:
         eid = f"YB-{uuid.uuid4().hex[:6].upper()}"
+    db.close()
 
     # Build name from family_name + given_name if name not provided
     if not data.get("name"):
@@ -2071,11 +2080,8 @@ async def employee_self_register(request: Request):
 
     try:
         insert("employees", data)
-        db.commit()
     except Exception as e:
-        db.close()
         raise HTTPException(500, f"创建员工失败: {str(e)}")
-    db.close()
 
     return {"ok": True, "id": eid, "message": f"员工档案已创建 / Mitarbeiterakte erstellt: {eid}"}
 

@@ -1140,13 +1140,13 @@ async def test_admin_check_edit_permission_per_module(auth_headers):
 
 @pytest.mark.asyncio
 async def test_all_modules_have_permissions_seeded():
-    """All 25 modules should have permission_overrides for every role."""
+    """All 27 modules should have permission_overrides for every role."""
     ALL_MODULES = [
         "dashboard", "employees", "suppliers", "talent", "dispatch", "recruit",
         "timesheet", "settlement", "warehouse", "schedule", "templates",
         "clock", "container", "messages", "analytics", "admin", "logs",
         "grades", "quotation", "files", "leave", "expense", "performance",
-        "mypage", "accounts", "whsalary"
+        "mypage", "accounts", "whsalary", "safety"
     ]
     ALL_ROLES = ["admin", "ceo", "hr", "wh", "fin", "sup", "mgr", "worker"]
     db = database.get_db()
@@ -1410,3 +1410,158 @@ async def test_payroll_confirmation_invalid_step(auth_headers):
                           json={"month": "2026-08", "step": "invalid_step"},
                           headers=auth_headers)
         assert r.status_code == 400
+
+
+# ── Tests: Safety Incidents, Org Chart, Employee Registration, Compliance ──
+
+@pytest.mark.asyncio
+async def test_safety_incidents_crud(auth_headers):
+    """Create, list, and update safety incidents."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create
+        r = await ac.post("/api/safety-incidents", json={
+            "incident_type": "安全事件",
+            "severity": "严重",
+            "warehouse_code": "UNA",
+            "incident_date": "2026-02-10",
+            "description": "叉车碰撞货架",
+            "involved_employees": "YB-001"
+        }, headers=auth_headers)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        sid = r.json()["id"]
+
+        # List
+        r = await ac.get("/api/safety-incidents", headers=auth_headers)
+        assert r.status_code == 200
+        incidents = r.json()
+        assert len(incidents) >= 1
+
+        # Update
+        r = await ac.put(f"/api/safety-incidents/{sid}", json={
+            "status": "已解决",
+            "corrective_action": "加装防护栏"
+        }, headers=auth_headers)
+        assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_safety_incident_missing_description(auth_headers):
+    """Safety incident without description should return 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/safety-incidents", json={
+            "incident_type": "安全事件",
+            "severity": "一般"
+        }, headers=auth_headers)
+        assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_org_chart(auth_headers):
+    """Org chart should return hierarchy levels and warehouse groups."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/org-chart", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert "levels" in data
+        assert "by_warehouse" in data
+        assert "total" in data
+        assert data["total"] > 0
+        assert len(data["levels"]) == 7  # P9, P8, P7, P5/P6, P4, P2/P3, P0/P1
+
+
+@pytest.mark.asyncio
+async def test_employee_self_registration():
+    """Self-registration should create employee without auth."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employee-register", json={
+            "name": "TestUser",
+            "gender": "男",
+            "nationality": "CN",
+            "phone": "+49-176-1234",
+            "email": "test@example.com",
+            "tax_class": "1",
+            "health_insurance": "TK",
+            "iban": "DE89370400440532013000"
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["id"].startswith("YB-")
+
+
+@pytest.mark.asyncio
+async def test_employee_self_registration_missing_name():
+    """Self-registration without name should return 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employee-register", json={
+            "gender": "男",
+            "nationality": "CN"
+        })
+        assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_id_naming_rules(auth_headers):
+    """ID naming rules should be readable and updatable."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Get rules
+        r = await ac.get("/api/id-naming-rules", headers=auth_headers)
+        assert r.status_code == 200
+        rules = r.json()
+        assert len(rules) >= 1
+        assert rules[0]["prefix"] == "YB"
+
+        # Update rules
+        r = await ac.put("/api/id-naming-rules", json={
+            "prefix": "EMP",
+            "separator": "-",
+            "next_number": 100,
+            "padding": 4,
+            "description": "新规则"
+        }, headers=auth_headers)
+        assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_compliance_check(auth_headers):
+    """Compliance check should return violation data."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/compliance/work-hours?month=2026-02", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert "month" in data
+        assert "daily_violations" in data
+        assert "weekly_violations" in data
+        assert "compliant" in data
+
+
+@pytest.mark.asyncio
+async def test_timesheet_compliance_daily_limit(auth_headers):
+    """Timesheet creation with >10h should be rejected."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        emps = (await ac.get("/api/employees", headers=auth_headers)).json()
+        emp = emps[0]
+        r = await ac.post("/api/timesheet", json={
+            "employee_id": emp["id"],
+            "employee_name": emp["name"],
+            "work_date": "2026-03-20",
+            "warehouse_code": "WH001",
+            "start_time": "06:00",
+            "end_time": "17:00",
+            "hours": 11,
+            "position": "库内",
+            "grade": "P1",
+            "base_rate": 12,
+            "hourly_pay": 132
+        }, headers=auth_headers)
+        assert r.status_code == 400
+        assert "10" in r.json()["detail"]
