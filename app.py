@@ -326,13 +326,27 @@ def get_employee(eid: str, user=Depends(get_user)):
 @app.post("/api/employees")
 async def create_employee(request: Request, user=Depends(get_user)):
     data = await request.json()
+    if not data.get("name"):
+        raise HTTPException(400, "员工姓名不能为空")
     if "id" not in data: data["id"] = f"YB-{uuid.uuid4().hex[:6].upper()}"
-    insert("employees", data); return {"ok": True, "id": data["id"]}
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    try:
+        insert("employees", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建员工失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "employees", data["id"], f"创建员工: {data.get('name','')}")
+    return {"ok": True, "id": data["id"]}
 
 @app.put("/api/employees/{eid}")
 async def update_employee(eid: str, request: Request, user=Depends(get_user)):
     data = await request.json(); data["updated_at"] = datetime.now().isoformat()
-    update("employees", "id", eid, data); return {"ok": True}
+    try:
+        update("employees", "id", eid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新员工失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "employees", eid, json.dumps(list(data.keys())))
+    return {"ok": True}
 
 # ── Account Management ──
 @app.get("/api/accounts")
@@ -578,10 +592,16 @@ def get_wh_salary_config(warehouse_code: Optional[str] = None, user=Depends(get_
 async def create_wh_salary_config(request: Request, user=Depends(get_user)):
     """创建仓库薪资配置"""
     data = await request.json()
+    if not data.get("warehouse_code") or not data.get("grade"):
+        raise HTTPException(400, "仓库编码和职级不能为空")
     data["id"] = f"WSC-{data['warehouse_code']}-{data['grade']}-{data.get('position_type','库内')}"
     data["created_at"] = datetime.now().isoformat()
     data["updated_at"] = datetime.now().isoformat()
-    insert("warehouse_salary_config", data)
+    try:
+        insert("warehouse_salary_config", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建仓库薪资配置失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "warehouse_salary_config", data["id"], f"仓库: {data['warehouse_code']}, 职级: {data['grade']}")
     return {"ok": True, "id": data["id"]}
 
 @app.put("/api/warehouse-salary-config/{config_id}")
@@ -589,7 +609,11 @@ async def update_wh_salary_config(config_id: str, request: Request, user=Depends
     """更新仓库薪资配置"""
     data = await request.json()
     data["updated_at"] = datetime.now().isoformat()
-    update("warehouse_salary_config", "id", config_id, data)
+    try:
+        update("warehouse_salary_config", "id", config_id, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新仓库薪资配置失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "warehouse_salary_config", config_id, json.dumps(list(data.keys())))
     return {"ok": True}
 
 @app.get("/api/salary-rate")
@@ -619,8 +643,17 @@ def get_suppliers(user=Depends(get_user)): return q("suppliers")
 @app.post("/api/suppliers")
 async def create_supplier(request: Request, user=Depends(get_user)):
     data = await request.json()
+    if not data.get("name"):
+        raise HTTPException(400, "供应商名称不能为空")
     if "id" not in data: data["id"] = f"SUP-{uuid.uuid4().hex[:4].upper()}"
-    insert("suppliers", data); return {"ok": True, "id": data["id"]}
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    try:
+        insert("suppliers", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建供应商失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "suppliers", data["id"], f"创建供应商: {data.get('name','')}")
+    return {"ok": True, "id": data["id"]}
 
 # ── Warehouses ──
 @app.get("/api/warehouses")
@@ -636,6 +669,8 @@ def get_timesheet(employee_id: Optional[str] = None, user=Depends(get_user)):
 @app.post("/api/timesheet")
 async def create_timesheet(request: Request, user=Depends(get_user)):
     data = await request.json()
+    if not data.get("employee_id") or not data.get("work_date") or not data.get("warehouse_code"):
+        raise HTTPException(400, "员工ID、工作日期和仓库编码不能为空")
     if "id" not in data: data["id"] = f"WT-{uuid.uuid4().hex[:8]}"
 
     # 检查是否已存在相同的工时记录
@@ -675,7 +710,13 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
             data["hourly_pay"] = round(cfg["hourly_rate"] * hours, 2)
         db.close()
 
-    insert("timesheet", data)
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    try:
+        insert("timesheet", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建工时记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "timesheet", data["id"], f"员工: {employee_id}, 日期: {work_date}")
     return {"ok": True}
 
 # ── Payroll Summary ──
@@ -761,7 +802,9 @@ async def create_container(request: Request, user=Depends(get_user)):
             data["client_revenue"] = wh_info[rate_col] if wh_info.get(rate_col) else 0
         db.close()
 
-    insert("container_records", data); return {"ok": True}
+    insert("container_records", data)
+    audit_log(user.get("username", ""), "create", "container_records", data["id"], f"柜号: {data.get('container_no','')}")
+    return {"ok": True}
 
 # ── Grades ──
 @app.get("/api/grades")
@@ -772,8 +815,17 @@ def get_evaluations(user=Depends(get_user)): return q("grade_evaluations")
 
 @app.post("/api/grade-evaluations")
 async def create_eval(request: Request, user=Depends(get_user)):
-    data = await request.json(); data["id"] = f"GE-{uuid.uuid4().hex[:6]}"
-    insert("grade_evaluations", data); return {"ok": True}
+    data = await request.json()
+    if not data.get("employee_id"):
+        raise HTTPException(400, "员工ID不能为空")
+    data["id"] = f"GE-{uuid.uuid4().hex[:6]}"
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("grade_evaluations", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建职级评定失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "grade_evaluations", data["id"], f"员工: {data.get('employee_id','')}")
+    return {"ok": True}
 
 # ── Promotions ──
 @app.get("/api/promotions")
@@ -781,13 +833,28 @@ def get_promotions(user=Depends(get_user)): return q("promotion_applications")
 
 @app.post("/api/promotions")
 async def create_promotion(request: Request, user=Depends(get_user)):
-    data = await request.json(); data["id"] = f"PA-{uuid.uuid4().hex[:6]}"
+    data = await request.json()
+    if not data.get("employee_id"):
+        raise HTTPException(400, "员工ID不能为空")
+    data["id"] = f"PA-{uuid.uuid4().hex[:6]}"
     data["apply_date"] = datetime.now().strftime("%Y-%m-%d")
-    insert("promotion_applications", data); return {"ok": True}
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("promotion_applications", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建晋升申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "promotion_applications", data["id"], f"员工: {data.get('employee_id','')}")
+    return {"ok": True}
 
 @app.put("/api/promotions/{pid}")
 async def update_promotion(pid: str, request: Request, user=Depends(get_user)):
-    update("promotion_applications", "id", pid, await request.json()); return {"ok": True}
+    data = await request.json()
+    try:
+        update("promotion_applications", "id", pid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新晋升申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "promotion_applications", pid, json.dumps(list(data.keys())))
+    return {"ok": True}
 
 # ── Bonuses ──
 @app.get("/api/bonuses")
@@ -795,12 +862,28 @@ def get_bonuses(user=Depends(get_user)): return q("bonus_applications")
 
 @app.post("/api/bonuses")
 async def create_bonus(request: Request, user=Depends(get_user)):
-    data = await request.json(); data["id"] = f"BA-{uuid.uuid4().hex[:6]}"
-    insert("bonus_applications", data); return {"ok": True}
+    data = await request.json()
+    if not data.get("employee_id"):
+        raise HTTPException(400, "员工ID不能为空")
+    data["id"] = f"BA-{uuid.uuid4().hex[:6]}"
+    data.setdefault("apply_date", datetime.now().strftime("%Y-%m-%d"))
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("bonus_applications", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建奖金申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "bonus_applications", data["id"], f"员工: {data.get('employee_id','')}")
+    return {"ok": True}
 
 @app.put("/api/bonuses/{bid}")
 async def update_bonus(bid: str, request: Request, user=Depends(get_user)):
-    update("bonus_applications", "id", bid, await request.json()); return {"ok": True}
+    data = await request.json()
+    try:
+        update("bonus_applications", "id", bid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新奖金申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "bonus_applications", bid, json.dumps(list(data.keys())))
+    return {"ok": True}
 
 # ── Performance ──
 @app.get("/api/performance")
@@ -808,12 +891,27 @@ def get_performance(user=Depends(get_user)): return q("performance_reviews")
 
 @app.post("/api/performance")
 async def create_perf(request: Request, user=Depends(get_user)):
-    data = await request.json(); data["id"] = f"PR-{uuid.uuid4().hex[:6]}"
-    insert("performance_reviews", data); return {"ok": True}
+    data = await request.json()
+    if not data.get("employee_id"):
+        raise HTTPException(400, "员工ID不能为空")
+    data["id"] = f"PR-{uuid.uuid4().hex[:6]}"
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("performance_reviews", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建绩效评估失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "performance_reviews", data["id"], f"员工: {data.get('employee_id','')}")
+    return {"ok": True}
 
 @app.put("/api/performance/{pid}")
 async def update_perf(pid: str, request: Request, user=Depends(get_user)):
-    update("performance_reviews", "id", pid, await request.json()); return {"ok": True}
+    data = await request.json()
+    try:
+        update("performance_reviews", "id", pid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新绩效评估失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "performance_reviews", pid, json.dumps(list(data.keys())))
+    return {"ok": True}
 
 # ── Quotations ──
 @app.get("/api/quotation-templates")
@@ -824,13 +922,28 @@ def get_quotations(user=Depends(get_user)): return q("quotation_records")
 
 @app.post("/api/quotations")
 async def create_quotation(request: Request, user=Depends(get_user)):
-    data = await request.json(); data["id"] = f"QR-{uuid.uuid4().hex[:6]}"
+    data = await request.json()
+    if not data.get("client_name"):
+        raise HTTPException(400, "客户名称不能为空")
+    data["id"] = f"QR-{uuid.uuid4().hex[:6]}"
     data["quote_date"] = datetime.now().strftime("%Y-%m-%d")
-    insert("quotation_records", data); return {"ok": True}
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("quotation_records", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建报价失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "quotation_records", data["id"], f"客户: {data.get('client_name','')}")
+    return {"ok": True}
 
 @app.put("/api/quotations/{qid}")
 async def update_quotation(qid: str, request: Request, user=Depends(get_user)):
-    update("quotation_records", "id", qid, await request.json()); return {"ok": True}
+    data = await request.json()
+    try:
+        update("quotation_records", "id", qid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新报价失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "quotation_records", qid, json.dumps(list(data.keys())))
+    return {"ok": True}
 
 # ── Employee Files ──
 @app.get("/api/files")
@@ -840,9 +953,19 @@ def get_files(employee_id: Optional[str] = None, user=Depends(get_user)):
 
 @app.post("/api/files")
 async def create_file_rec(request: Request, user=Depends(get_user)):
-    data = await request.json(); data["id"] = f"EF-{uuid.uuid4().hex[:6]}"
+    data = await request.json()
+    if not data.get("employee_id"):
+        raise HTTPException(400, "员工ID不能为空")
+    data["id"] = f"EF-{uuid.uuid4().hex[:6]}"
     data["upload_date"] = datetime.now().strftime("%Y-%m-%d")
-    insert("employee_files", data); return {"ok": True}
+    data.setdefault("uploaded_by", user.get("display_name", ""))
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("employee_files", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建文件记录失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "employee_files", data["id"], f"员工: {data.get('employee_id','')}")
+    return {"ok": True}
 
 # ── Leave ──
 @app.get("/api/leave-types")
@@ -858,14 +981,28 @@ def get_lr(user=Depends(get_user)): return q("leave_requests")
 
 @app.post("/api/leave-requests")
 async def create_lr(request: Request, user=Depends(get_user)):
-    data = await request.json(); data["id"] = f"LR-{uuid.uuid4().hex[:6]}"
+    data = await request.json()
+    if not data.get("employee_id") or not data.get("leave_type"):
+        raise HTTPException(400, "员工ID和假期类型不能为空")
+    if not data.get("start_date") or not data.get("end_date"):
+        raise HTTPException(400, "开始日期和结束日期不能为空")
+    data["id"] = f"LR-{uuid.uuid4().hex[:6]}"
     data["apply_date"] = datetime.now().strftime("%Y-%m-%d"); data["status"] = "已提交"
-    insert("leave_requests", data); return {"ok": True}
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("leave_requests", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建请假申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "leave_requests", data["id"], f"员工: {data.get('employee_id','')}, 类型: {data.get('leave_type','')}")
+    return {"ok": True}
 
 @app.put("/api/leave-requests/{lid}")
 async def update_lr(lid: str, request: Request, user=Depends(get_user)):
     data = await request.json()
-    update("leave_requests", "id", lid, data)
+    try:
+        update("leave_requests", "id", lid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新请假申请失败: {str(e)}")
     if data.get("status") == "已批准":
         lr = q("leave_requests", "id=?", (lid,))
         if lr:
@@ -874,6 +1011,7 @@ async def update_lr(lid: str, request: Request, user=Depends(get_user)):
             db.execute("UPDATE leave_balances SET used_days=used_days+?,remaining_days=remaining_days-? WHERE employee_id=? AND year=? AND leave_type=?",
                 (lr[0]["days"], lr[0]["days"], lr[0]["employee_id"], current_year, lr[0]["leave_type"]))
             db.commit(); db.close()
+    audit_log(user.get("username", ""), "update", "leave_requests", lid, json.dumps(list(data.keys())))
     return {"ok": True}
 
 # ── Expenses ──
@@ -882,13 +1020,28 @@ def get_expenses(user=Depends(get_user)): return q("expense_claims")
 
 @app.post("/api/expenses")
 async def create_expense(request: Request, user=Depends(get_user)):
-    data = await request.json(); data["id"] = f"EC-{uuid.uuid4().hex[:6]}"
+    data = await request.json()
+    if not data.get("employee_id"):
+        raise HTTPException(400, "员工ID不能为空")
+    data["id"] = f"EC-{uuid.uuid4().hex[:6]}"
     data["apply_date"] = datetime.now().strftime("%Y-%m-%d"); data["status"] = "已提交"
-    insert("expense_claims", data); return {"ok": True}
+    data.setdefault("created_at", datetime.now().isoformat())
+    try:
+        insert("expense_claims", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建报销申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "expense_claims", data["id"], f"员工: {data.get('employee_id','')}, 金额: {data.get('amount','')}")
+    return {"ok": True}
 
 @app.put("/api/expenses/{eid}")
 async def update_expense(eid: str, request: Request, user=Depends(get_user)):
-    update("expense_claims", "id", eid, await request.json()); return {"ok": True}
+    data = await request.json()
+    try:
+        update("expense_claims", "id", eid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新报销申请失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "expense_claims", eid, json.dumps(list(data.keys())))
+    return {"ok": True}
 
 # ── Other modules ──
 @app.get("/api/talent")
@@ -946,10 +1099,15 @@ def get_perms(user=Depends(get_user)): return q("permission_overrides", order="r
 
 @app.post("/api/permissions/update")
 async def update_perm(request: Request, user=Depends(get_user)):
-    d = await request.json(); db = database.get_db()
+    d = await request.json()
+    if not d.get("role") or not d.get("module"):
+        raise HTTPException(400, "角色和模块不能为空")
+    db = database.get_db()
     db.execute("UPDATE permission_overrides SET can_view=?,can_create=?,can_edit=?,can_delete=?,can_export=?,can_approve=? WHERE role=? AND module=?",
         (d.get("can_view",0),d.get("can_create",0),d.get("can_edit",0),d.get("can_delete",0),d.get("can_export",0),d.get("can_approve",0),d["role"],d["module"]))
-    db.commit(); db.close(); return {"ok": True}
+    db.commit(); db.close()
+    audit_log(user.get("username", ""), "update", "permission_overrides", f"{d['role']}/{d['module']}", json.dumps(d))
+    return {"ok": True}
 
 # ── File Upload ──
 @app.post("/api/upload")
