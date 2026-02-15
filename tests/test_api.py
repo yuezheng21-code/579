@@ -107,7 +107,7 @@ async def test_create_employee_with_account(auth_headers):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.post("/api/employees", headers=auth_headers,
                           json={"name": "权限测试", "grade": "P2", "status": "在职",
-                                "primary_wh": "WH01",
+                                "primary_wh": "UNA",
                                 "create_account": True, "account_role": "wh"})
     assert r.status_code == 200
     data = r.json()
@@ -234,7 +234,7 @@ async def test_create_leave_request_success(auth_headers):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.post("/api/leave-requests", headers=auth_headers,
-                          json={"employee_id": "YB-001", "leave_type": "AL",
+                          json={"employee_id": "YB-001", "leave_type": "annual",
                                 "start_date": "2026-03-01", "end_date": "2026-03-02", "days": 2})
     assert r.status_code == 200
     assert r.json()["ok"] is True
@@ -1249,7 +1249,7 @@ async def test_multi_level_timesheet_approval(auth_headers):
         emp = emps[0]
         ts_data = {
             "employee_id": emp["id"], "employee_name": emp["name"],
-            "work_date": "2026-02-10", "warehouse_code": "WH001",
+            "work_date": "2026-02-10", "warehouse_code": "UNA",
             "start_time": "08:00", "end_time": "16:00", "hours": 8,
             "position": "库内", "grade": emp.get("grade", "P1"),
             "base_rate": 12, "hourly_pay": 96
@@ -1306,7 +1306,7 @@ async def test_payslip_generate_and_list(auth_headers):
         emp = emps[0]
         await ac.post("/api/timesheet", json={
             "employee_id": emp["id"], "employee_name": emp["name"],
-            "work_date": "2026-03-05", "warehouse_code": "WH001",
+            "work_date": "2026-03-05", "warehouse_code": "UNA",
             "start_time": "08:00", "end_time": "16:00", "hours": 8,
             "position": "库内", "grade": "P1", "base_rate": 12,
             "hourly_pay": 96, "net_pay": 80
@@ -1335,7 +1335,7 @@ async def test_payslip_confirm(auth_headers):
         emp = emps[0]
         await ac.post("/api/timesheet", json={
             "employee_id": emp["id"], "employee_name": emp["name"],
-            "work_date": "2026-04-05", "warehouse_code": "WH001",
+            "work_date": "2026-04-05", "warehouse_code": "UNA",
             "start_time": "08:00", "end_time": "16:00", "hours": 8,
             "position": "库内", "grade": "P1", "base_rate": 12,
             "hourly_pay": 96, "net_pay": 80
@@ -1363,7 +1363,7 @@ async def test_payslip_dispute(auth_headers):
         emp = emps[0]
         await ac.post("/api/timesheet", json={
             "employee_id": emp["id"], "employee_name": emp["name"],
-            "work_date": "2026-05-05", "warehouse_code": "WH001",
+            "work_date": "2026-05-05", "warehouse_code": "UNA",
             "start_time": "08:00", "end_time": "16:00", "hours": 8,
             "position": "库内", "grade": "P1", "base_rate": 12,
             "hourly_pay": 96, "net_pay": 80
@@ -1391,7 +1391,7 @@ async def test_timesheet_dispute_and_reply(auth_headers):
         emp = emps[0]
         r = await ac.post("/api/timesheet", json={
             "employee_id": emp["id"], "employee_name": emp["name"],
-            "work_date": "2026-06-05", "warehouse_code": "WH001",
+            "work_date": "2026-06-05", "warehouse_code": "UNA",
             "start_time": "08:00", "end_time": "16:00", "hours": 8,
             "position": "库内", "grade": "P1", "base_rate": 12,
             "hourly_pay": 96, "net_pay": 80
@@ -1428,7 +1428,7 @@ async def test_payroll_preview(auth_headers):
         emp = emps[0]
         await ac.post("/api/timesheet", json={
             "employee_id": emp["id"], "employee_name": emp["name"],
-            "work_date": "2026-07-05", "warehouse_code": "WH001",
+            "work_date": "2026-07-05", "warehouse_code": "UNA",
             "start_time": "08:00", "end_time": "16:00", "hours": 8,
             "position": "库内", "grade": "P1", "base_rate": 12,
             "hourly_pay": 96, "net_pay": 80
@@ -1618,7 +1618,7 @@ async def test_timesheet_compliance_daily_limit(auth_headers):
             "employee_id": emp["id"],
             "employee_name": emp["name"],
             "work_date": "2026-03-20",
-            "warehouse_code": "WH001",
+            "warehouse_code": "UNA",
             "start_time": "06:00",
             "end_time": "17:00",
             "hours": 11,
@@ -2875,7 +2875,7 @@ async def test_quotation_pdf_success(auth_headers):
             "client_name": "TestClient",
             "biz_type": "仓储",
             "service_type": "装卸",
-            "warehouse_code": "WH-001",
+            "warehouse_code": "UNA",
             "headcount": 5,
             "base_price": 15.0,
             "final_price": 18.0,

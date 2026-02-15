@@ -407,7 +407,7 @@ async def create_employee(request: Request, user=Depends(get_user)):
                 """INSERT INTO users(username, password_hash, display_name, role, employee_id, warehouse_code, biz_line)
                    VALUES(?,?,?,?,?,?,?)""",
                 (username, password_hash, data.get("name", ""), account_role,
-                 employee_id, data.get("primary_wh", ""), data.get("biz_line", "")))
+                 employee_id, data.get("primary_wh") or None, data.get("biz_line", "")))
             db.commit()
         except Exception as e:
             # Revert has_account flag since account creation failed
