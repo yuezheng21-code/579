@@ -1158,3 +1158,255 @@ async def test_all_modules_have_permissions_seeded():
             ).fetchone()
             assert row is not None, f"Missing permission_overrides for role={role}, module={mod}"
     db.close()
+
+
+# ── New Tests: Multi-level Approval, Payslips, Disputes, Payroll Preview ──
+
+
+@pytest.mark.asyncio
+async def test_employees_have_work_hours_per_week(auth_headers):
+    """Employee records should include work_hours_per_week field."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees", headers=auth_headers)
+    assert r.status_code == 200
+    emps = r.json()
+    assert len(emps) > 0
+    assert "work_hours_per_week" in emps[0]
+
+
+@pytest.mark.asyncio
+async def test_multi_level_timesheet_approval(auth_headers):
+    """Timesheet batch-approve should support leader/wh/regional/fin types."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create a timesheet entry first
+        emps = (await ac.get("/api/employees", headers=auth_headers)).json()
+        emp = emps[0]
+        ts_data = {
+            "employee_id": emp["id"], "employee_name": emp["name"],
+            "work_date": "2026-02-10", "warehouse_code": "WH001",
+            "start_time": "08:00", "end_time": "16:00", "hours": 8,
+            "position": "库内", "grade": emp.get("grade", "P1"),
+            "base_rate": 12, "hourly_pay": 96
+        }
+        r = await ac.post("/api/timesheet", json=ts_data, headers=auth_headers)
+        assert r.status_code == 200
+
+        # Get the created timesheet ID
+        all_ts = (await ac.get("/api/timesheet", headers=auth_headers)).json()
+        ts_entry = [t for t in all_ts if t["employee_id"] == emp["id"] and t["work_date"] == "2026-02-10"]
+        assert len(ts_entry) > 0
+        ts_id = ts_entry[0]["id"]
+
+        # Step 1: leader approval
+        r = await ac.post("/api/timesheet/batch-approve",
+                          json={"ids": [ts_id], "type": "leader"}, headers=auth_headers)
+        assert r.status_code == 200
+        all_ts = (await ac.get("/api/timesheet", headers=auth_headers)).json()
+        ts = [t for t in all_ts if t["id"] == ts_id][0]
+        assert ts["wh_status"] == "已班组长审批"
+
+        # Step 2: warehouse manager approval
+        r = await ac.post("/api/timesheet/batch-approve",
+                          json={"ids": [ts_id], "type": "wh"}, headers=auth_headers)
+        assert r.status_code == 200
+        all_ts = (await ac.get("/api/timesheet", headers=auth_headers)).json()
+        ts = [t for t in all_ts if t["id"] == ts_id][0]
+        assert ts["wh_status"] == "已仓库审批"
+
+        # Step 3: regional manager approval
+        r = await ac.post("/api/timesheet/batch-approve",
+                          json={"ids": [ts_id], "type": "regional"}, headers=auth_headers)
+        assert r.status_code == 200
+        all_ts = (await ac.get("/api/timesheet", headers=auth_headers)).json()
+        ts = [t for t in all_ts if t["id"] == ts_id][0]
+        assert ts["wh_status"] == "已区域审批"
+
+        # Step 4: finance confirmation
+        r = await ac.post("/api/timesheet/batch-approve",
+                          json={"ids": [ts_id], "type": "fin"}, headers=auth_headers)
+        assert r.status_code == 200
+        all_ts = (await ac.get("/api/timesheet", headers=auth_headers)).json()
+        ts = [t for t in all_ts if t["id"] == ts_id][0]
+        assert ts["wh_status"] == "已入账"
+
+
+@pytest.mark.asyncio
+async def test_payslip_generate_and_list(auth_headers):
+    """Generate payslips from timesheet and list them."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Create timesheet entry
+        emps = (await ac.get("/api/employees", headers=auth_headers)).json()
+        emp = emps[0]
+        await ac.post("/api/timesheet", json={
+            "employee_id": emp["id"], "employee_name": emp["name"],
+            "work_date": "2026-03-05", "warehouse_code": "WH001",
+            "start_time": "08:00", "end_time": "16:00", "hours": 8,
+            "position": "库内", "grade": "P1", "base_rate": 12,
+            "hourly_pay": 96, "net_pay": 80
+        }, headers=auth_headers)
+
+        # Generate payslips for the month
+        r = await ac.post("/api/payslips/generate",
+                          json={"month": "2026-03"}, headers=auth_headers)
+        assert r.status_code == 200
+        assert r.json()["count"] >= 1
+
+        # List payslips
+        r = await ac.get("/api/payslips?month=2026-03", headers=auth_headers)
+        assert r.status_code == 200
+        payslips = r.json()
+        assert len(payslips) >= 1
+        assert payslips[0]["status"] == "待确认"
+
+
+@pytest.mark.asyncio
+async def test_payslip_confirm(auth_headers):
+    """Employee can confirm a payslip."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        emps = (await ac.get("/api/employees", headers=auth_headers)).json()
+        emp = emps[0]
+        await ac.post("/api/timesheet", json={
+            "employee_id": emp["id"], "employee_name": emp["name"],
+            "work_date": "2026-04-05", "warehouse_code": "WH001",
+            "start_time": "08:00", "end_time": "16:00", "hours": 8,
+            "position": "库内", "grade": "P1", "base_rate": 12,
+            "hourly_pay": 96, "net_pay": 80
+        }, headers=auth_headers)
+        await ac.post("/api/payslips/generate",
+                      json={"month": "2026-04"}, headers=auth_headers)
+        payslips = (await ac.get("/api/payslips?month=2026-04", headers=auth_headers)).json()
+        pid = payslips[0]["id"]
+
+        r = await ac.post(f"/api/payslips/{pid}/confirm", headers=auth_headers)
+        assert r.status_code == 200
+
+        updated = (await ac.get("/api/payslips?month=2026-04", headers=auth_headers)).json()
+        confirmed = [p for p in updated if p["id"] == pid]
+        assert confirmed[0]["status"] == "已确认"
+        assert confirmed[0]["confirmed_by_employee"] == 1
+
+
+@pytest.mark.asyncio
+async def test_payslip_dispute(auth_headers):
+    """Employee can dispute a payslip."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        emps = (await ac.get("/api/employees", headers=auth_headers)).json()
+        emp = emps[0]
+        await ac.post("/api/timesheet", json={
+            "employee_id": emp["id"], "employee_name": emp["name"],
+            "work_date": "2026-05-05", "warehouse_code": "WH001",
+            "start_time": "08:00", "end_time": "16:00", "hours": 8,
+            "position": "库内", "grade": "P1", "base_rate": 12,
+            "hourly_pay": 96, "net_pay": 80
+        }, headers=auth_headers)
+        await ac.post("/api/payslips/generate",
+                      json={"month": "2026-05"}, headers=auth_headers)
+        payslips = (await ac.get("/api/payslips?month=2026-05", headers=auth_headers)).json()
+        pid = payslips[0]["id"]
+
+        r = await ac.post(f"/api/payslips/{pid}/dispute",
+                          json={"reason": "工时计算有误"}, headers=auth_headers)
+        assert r.status_code == 200
+
+        updated = (await ac.get("/api/payslips?month=2026-05", headers=auth_headers)).json()
+        disputed = [p for p in updated if p["id"] == pid]
+        assert disputed[0]["status"] == "申诉中"
+
+
+@pytest.mark.asyncio
+async def test_timesheet_dispute_and_reply(auth_headers):
+    """Employee can dispute a timesheet entry and manager can reply."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        emps = (await ac.get("/api/employees", headers=auth_headers)).json()
+        emp = emps[0]
+        r = await ac.post("/api/timesheet", json={
+            "employee_id": emp["id"], "employee_name": emp["name"],
+            "work_date": "2026-06-05", "warehouse_code": "WH001",
+            "start_time": "08:00", "end_time": "16:00", "hours": 8,
+            "position": "库内", "grade": "P1", "base_rate": 12,
+            "hourly_pay": 96, "net_pay": 80
+        }, headers=auth_headers)
+        assert r.status_code == 200
+        all_ts = (await ac.get("/api/timesheet", headers=auth_headers)).json()
+        ts_entry = [t for t in all_ts if t["employee_id"] == emp["id"] and t["work_date"] == "2026-06-05"]
+        ts_id = ts_entry[0]["id"]
+
+        # File dispute
+        r = await ac.post(f"/api/timesheet/{ts_id}/dispute",
+                          json={"reason": "实际工作9小时"}, headers=auth_headers)
+        assert r.status_code == 200
+        all_ts = (await ac.get("/api/timesheet", headers=auth_headers)).json()
+        ts = [t for t in all_ts if t["id"] == ts_id][0]
+        assert ts["dispute_status"] == "申诉中"
+
+        # Manager reply
+        r = await ac.post(f"/api/timesheet/{ts_id}/dispute-reply",
+                          json={"reply": "已核实并调整", "status": "已处理"}, headers=auth_headers)
+        assert r.status_code == 200
+        all_ts = (await ac.get("/api/timesheet", headers=auth_headers)).json()
+        ts = [t for t in all_ts if t["id"] == ts_id][0]
+        assert ts["dispute_status"] == "已处理"
+        assert ts["dispute_reply"] == "已核实并调整"
+
+
+@pytest.mark.asyncio
+async def test_payroll_preview(auth_headers):
+    """Payroll preview should return employee summary and confirmation status."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        emps = (await ac.get("/api/employees", headers=auth_headers)).json()
+        emp = emps[0]
+        await ac.post("/api/timesheet", json={
+            "employee_id": emp["id"], "employee_name": emp["name"],
+            "work_date": "2026-07-05", "warehouse_code": "WH001",
+            "start_time": "08:00", "end_time": "16:00", "hours": 8,
+            "position": "库内", "grade": "P1", "base_rate": 12,
+            "hourly_pay": 96, "net_pay": 80
+        }, headers=auth_headers)
+
+        r = await ac.get("/api/payroll-preview?month=2026-07", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert "month" in data
+        assert "employees" in data
+        assert "confirmations" in data
+        assert "total_count" in data
+        assert data["total_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_payroll_confirmation_flow(auth_headers):
+    """Payroll confirmation should support 4-step approval."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        for step in ["leader", "wh_manager", "regional_manager", "finance"]:
+            r = await ac.post("/api/payroll-confirmations",
+                              json={"month": "2026-08", "step": step},
+                              headers=auth_headers)
+            assert r.status_code == 200
+            assert r.json()["step"] == step
+
+        # Verify all steps are approved
+        r = await ac.get("/api/payroll-confirmations?month=2026-08", headers=auth_headers)
+        assert r.status_code == 200
+        confirmations = r.json()
+        assert len(confirmations) == 4
+        for c in confirmations:
+            assert c["status"] == "已审批"
+
+
+@pytest.mark.asyncio
+async def test_payroll_confirmation_invalid_step(auth_headers):
+    """Invalid approval step should return 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/payroll-confirmations",
+                          json={"month": "2026-08", "step": "invalid_step"},
+                          headers=auth_headers)
+        assert r.status_code == 400

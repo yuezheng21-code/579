@@ -1779,12 +1779,8 @@ async def create_dispute(payslip_id: str, request: Request, user=Depends(get_use
         db.execute(
             "UPDATE payslips SET status='申诉中', notes=? WHERE id=?",
             (reason, payslip_id))
-        # Also log the dispute to audit_logs
-        db.execute(
-            "INSERT INTO audit_logs (id,user,action,target,detail,created_at) VALUES (?,?,?,?,?,?)",
-            (str(uuid.uuid4()), user.get("username", ""),
-             "salary_dispute", payslip_id, reason, datetime.now().isoformat()))
         db.commit()
+        audit_log(user.get("username", ""), "salary_dispute", "payslips", payslip_id, reason)
         return {"ok": True}
     except Exception as e:
         db.rollback()
@@ -1802,11 +1798,8 @@ async def create_timesheet_dispute(ts_id: str, request: Request, user=Depends(ge
         db.execute(
             "UPDATE timesheet SET dispute_status='申诉中', dispute_reason=? WHERE id=?",
             (reason, ts_id))
-        db.execute(
-            "INSERT INTO audit_logs (id,user,action,target,detail,created_at) VALUES (?,?,?,?,?,?)",
-            (str(uuid.uuid4()), user.get("username", ""),
-             "timesheet_dispute", ts_id, reason, datetime.now().isoformat()))
         db.commit()
+        audit_log(user.get("username", ""), "timesheet_dispute", "timesheet", ts_id, reason)
         return {"ok": True}
     except Exception as e:
         db.rollback()
