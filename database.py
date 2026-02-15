@@ -181,7 +181,7 @@ class DBWrapper:
 def get_db():
     """Get database connection with abstraction layer"""
     if USE_POSTGRES:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
         # Set autocommit to False to match SQLite behavior
         conn.autocommit = False
         return DBWrapper(conn, is_postgres=True)
