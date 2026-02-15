@@ -1,5 +1,5 @@
 """渊博+579 HR V6 — FastAPI Backend (Enhanced with Account Management & Warehouse Salary)"""
-import os, json, uuid, shutil, secrets, string, traceback
+import os, json, uuid, shutil, secrets, string, traceback, threading
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
@@ -28,13 +28,17 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 @app.on_event("startup")
 def on_startup():
-    try:
-        database.init_db()
-        database.seed_data()
-        database.ensure_demo_users()
-    except Exception as e:
-        print(f"⚠️ Database initialization error: {e}")
-        traceback.print_exc()
+    def _init_database():
+        try:
+            database.init_db()
+            database.seed_data()
+            database.ensure_demo_users()
+            print("✅ Database initialized successfully")
+        except Exception as e:
+            print(f"⚠️ Database initialization error: {e}")
+            traceback.print_exc()
+
+    threading.Thread(target=_init_database, daemon=True).start()
 
 import hashlib, time, hmac, base64
 
