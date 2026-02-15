@@ -2052,3 +2052,214 @@ async def test_settlement_worker_expense(auth_headers):
         assert "warehouse_code" in data[0]
         assert "gross_pay" in data[0]
         assert "net_total" in data[0]
+
+
+# ── Field-Level Visibility & Editability Tests ──
+
+
+@pytest.mark.asyncio
+async def test_admin_sees_all_employee_fields(auth_headers):
+    """Admin (god view) should see all fields including sensitive ones."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees", headers=auth_headers)
+    assert r.status_code == 200
+    emps = r.json()
+    assert len(emps) > 0
+    emp = emps[0]
+    # Admin should see all sensitive fields
+    for field in ["birth_date", "id_number", "tax_no", "tax_id", "ssn", "iban",
+                  "base_salary", "hourly_rate", "health_insurance"]:
+        assert field in emp, f"Admin should see field: {field}"
+
+
+@pytest.mark.asyncio
+async def test_wh_hidden_fields_on_employees(wh_headers):
+    """Warehouse role should not see sensitive financial/personal fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees", headers=wh_headers)
+    assert r.status_code == 200
+    emps = r.json()
+    assert len(emps) > 0
+    emp = emps[0]
+    # WH should not see these sensitive fields
+    for field in ["tax_no", "tax_id", "ssn", "iban", "base_salary", "hourly_rate"]:
+        assert field not in emp, f"WH role should NOT see field: {field}"
+    # WH should still see basic work fields
+    assert "name" in emp
+    assert "position" in emp
+    assert "grade" in emp
+
+
+@pytest.mark.asyncio
+async def test_sup_hidden_fields_on_employees(sup_headers):
+    """Supplier role should not see sensitive employee fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees", headers=sup_headers)
+    assert r.status_code == 200
+    emps = r.json()
+    assert len(emps) > 0
+    emp = emps[0]
+    # Supplier should not see financial/personal sensitive fields
+    for field in ["tax_no", "tax_id", "ssn", "iban", "base_salary", "hourly_rate", "address"]:
+        assert field not in emp, f"Supplier role should NOT see field: {field}"
+    # Supplier should still see work-related fields
+    assert "name" in emp
+    assert "primary_wh" in emp
+
+
+@pytest.mark.asyncio
+async def test_single_employee_hidden_fields(wh_headers):
+    """GET /api/employees/{eid} should also respect hidden_fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees/YB-001", headers=wh_headers)
+    assert r.status_code == 200
+    emp = r.json()
+    # WH should not see sensitive fields even for single employee
+    for field in ["tax_no", "tax_id", "ssn", "iban"]:
+        assert field not in emp, f"WH role should NOT see field: {field} on single employee"
+    assert "name" in emp
+
+
+@pytest.mark.asyncio
+async def test_roster_hidden_fields(wh_headers):
+    """GET /api/roster should respect hidden_fields filtering."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/roster", headers=wh_headers)
+    assert r.status_code == 200
+    roster = r.json()
+    assert len(roster) > 0
+    emp = roster[0]
+    # WH should not see sensitive fields in roster either
+    for field in ["tax_no", "tax_id", "ssn", "iban"]:
+        assert field not in emp, f"WH role should NOT see field: {field} in roster"
+
+
+@pytest.mark.asyncio
+async def test_ceo_sees_all_employee_fields(ceo_headers):
+    """CEO should see all employee fields (no hidden fields by default)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees", headers=ceo_headers)
+    assert r.status_code == 200
+    emps = r.json()
+    assert len(emps) > 0
+    emp = emps[0]
+    # CEO should see all fields
+    for field in ["birth_date", "id_number", "base_salary", "hourly_rate", "iban"]:
+        assert field in emp, f"CEO should see field: {field}"
+
+
+@pytest.mark.asyncio
+async def test_admin_can_update_hidden_fields(auth_headers):
+    """Admin should be able to configure hidden_fields for a role/module."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Update hidden_fields for fin role on employees module
+        r = await ac.post("/api/permissions/update", headers=auth_headers,
+                          json={"role": "fin", "module": "employees",
+                                "can_view": 1, "can_create": 0, "can_edit": 0, "can_delete": 0,
+                                "can_export": 1, "can_approve": 0, "can_import": 0,
+                                "hidden_fields": "birth_date,id_number,address",
+                                "editable_fields": "",
+                                "data_scope": "all"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+    # Verify the hidden_fields was saved
+    db = database.get_db()
+    perm = db.execute("SELECT hidden_fields FROM permission_overrides WHERE role='fin' AND module='employees'").fetchone()
+    db.close()
+    assert "birth_date" in perm["hidden_fields"]
+
+
+@pytest.mark.asyncio
+async def test_field_definitions_endpoint(auth_headers):
+    """Admin should be able to get field definitions for a module."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/field-definitions/employees", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["module"] == "employees"
+    assert "fields" in data
+    fields = data["fields"]
+    # Check some sensitive fields are marked
+    assert fields["iban"]["sensitive"] is True
+    assert fields["tax_id"]["sensitive"] is True
+    assert fields["birth_date"]["sensitive"] is True
+    # Check non-sensitive fields
+    assert fields["name"]["sensitive"] is False
+    assert fields["grade"]["sensitive"] is False
+
+
+@pytest.mark.asyncio
+async def test_field_definitions_non_admin_forbidden(ceo_headers):
+    """Non-admin roles should not access field definitions."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/field-definitions/employees", headers=ceo_headers)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_hidden_fields_seeded_for_roles():
+    """Verify that hidden_fields are properly seeded for sensitive roles."""
+    db = database.get_db()
+    # Check wh role has hidden fields for employees
+    wh_perm = db.execute(
+        "SELECT hidden_fields FROM permission_overrides WHERE role='wh' AND module='employees'"
+    ).fetchone()
+    assert wh_perm is not None
+    assert "iban" in wh_perm["hidden_fields"]
+    assert "tax_id" in wh_perm["hidden_fields"]
+    assert "base_salary" in wh_perm["hidden_fields"]
+
+    # Check worker role has hidden fields for employees
+    worker_perm = db.execute(
+        "SELECT hidden_fields FROM permission_overrides WHERE role='worker' AND module='employees'"
+    ).fetchone()
+    assert worker_perm is not None
+    assert "iban" in worker_perm["hidden_fields"]
+    assert "phone" in worker_perm["hidden_fields"]
+
+    # Check admin has no hidden fields
+    admin_perm = db.execute(
+        "SELECT hidden_fields FROM permission_overrides WHERE role='admin' AND module='employees'"
+    ).fetchone()
+    assert admin_perm is not None
+    assert admin_perm["hidden_fields"] == ""
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_editable_fields_enforcement(auth_headers):
+    """Test that editable_fields are enforced when set for a role."""
+    # First, set editable_fields for wh role on employees module
+    transport = ASGITransport(app=app)
+
+    # Set editable_fields to restrict what wh can edit (for this test set up a narrow list)
+    db = database.get_db()
+    db.execute(
+        "UPDATE permission_overrides SET can_edit=1, editable_fields='status,position' WHERE role='wh' AND module='employees'"
+    )
+    db.commit()
+    db.close()
+
+    # Try to update employee as wh user - only status and position should be applied
+    wh_token = __import__("app").make_token("wh", "wh")
+    wh_headers = {"Authorization": f"Bearer {wh_token}"}
+
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/employees/YB-001", headers=wh_headers,
+                         json={"status": "在职", "position": "装卸", "base_salary": 99999})
+    assert r.status_code == 200
+    # Verify base_salary was NOT changed (enforced by editable_fields)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/employees/YB-001", headers=auth_headers)
+    emp = r.json()
+    assert emp["base_salary"] != 99999

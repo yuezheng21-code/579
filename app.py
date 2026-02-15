@@ -336,7 +336,8 @@ def get_employees(user=Depends(get_user)):
     role = user.get("role", "worker")
     # Supplier users can only see their own workers
     if role == "sup" and user.get("supplier_id"):
-        return q("employees", "supplier_id=?", (user["supplier_id"],))
+        rows = q("employees", "supplier_id=?", (user["supplier_id"],))
+        return _filter_hidden_fields(rows, role, "employees")
     # Warehouse users can only see employees in their warehouse
     if role == "wh" and user.get("warehouse_code"):
         wh = user["warehouse_code"]
@@ -346,14 +347,18 @@ def get_employees(user=Depends(get_user)):
             (wh, f"%{wh}%")
         ).fetchall()
         db.close()
-        return [dict(r) for r in rows]
-    return q("employees")
+        rows = [dict(r) for r in rows]
+        return _filter_hidden_fields(rows, role, "employees")
+    rows = q("employees")
+    return _filter_hidden_fields(rows, role, "employees")
 
 @app.get("/api/employees/{eid}")
 def get_employee(eid: str, user=Depends(get_user)):
     emps = q("employees", "id=?", (eid,))
     if not emps: raise HTTPException(404, "员工不存在")
-    return emps[0]
+    role = user.get("role", "worker")
+    filtered = _filter_hidden_fields(emps, role, "employees")
+    return filtered[0]
 
 @app.post("/api/employees")
 async def create_employee(request: Request, user=Depends(get_user)):
@@ -409,6 +414,10 @@ async def create_employee(request: Request, user=Depends(get_user)):
 @app.put("/api/employees/{eid}")
 async def update_employee(eid: str, request: Request, user=Depends(get_user)):
     data = await request.json(); data["updated_at"] = datetime.now().isoformat()
+    role = user.get("role", "worker")
+    data = _enforce_editable_fields(data, role, "employees")
+    if not data:
+        raise HTTPException(403, "无可编辑字段")
     try:
         update("employees", "id", eid, data)
     except Exception as e:
@@ -462,7 +471,8 @@ def get_roster(
         ORDER BY e.id ASC
     """, tuple(params)).fetchall()
     db.close()
-    return [dict(r) for r in rows]
+    result = [dict(r) for r in rows]
+    return _filter_hidden_fields(result, role, "employees")
 
 @app.get("/api/roster/stats")
 def get_roster_stats(user=Depends(get_user)):
@@ -1662,6 +1672,75 @@ def get_roles(user=Depends(get_user)):
         {"role": "worker", "label": "员工", "level": 10, "description": "一线工人"},
     ]
 
+# Module field definitions with Chinese labels and sensitivity markers
+MODULE_FIELD_DEFINITIONS = {
+    "employees": {
+        "id": {"label": "工号", "sensitive": False},
+        "name": {"label": "姓名", "sensitive": False},
+        "phone": {"label": "电话", "sensitive": True},
+        "email": {"label": "邮箱", "sensitive": True},
+        "nationality": {"label": "国籍", "sensitive": False},
+        "gender": {"label": "性别", "sensitive": False},
+        "birth_date": {"label": "出生日期", "sensitive": True},
+        "id_type": {"label": "证件类型", "sensitive": True},
+        "id_number": {"label": "证件号码", "sensitive": True},
+        "address": {"label": "地址", "sensitive": True},
+        "source": {"label": "来源", "sensitive": False},
+        "supplier_id": {"label": "供应商ID", "sensitive": False},
+        "biz_line": {"label": "业务线", "sensitive": False},
+        "department": {"label": "部门", "sensitive": False},
+        "primary_wh": {"label": "主仓库", "sensitive": False},
+        "dispatch_whs": {"label": "派遣仓库", "sensitive": False},
+        "position": {"label": "岗位", "sensitive": False},
+        "grade": {"label": "职级", "sensitive": False},
+        "wage_level": {"label": "薪级", "sensitive": True},
+        "settle_method": {"label": "结算方式", "sensitive": False},
+        "base_salary": {"label": "基本工资", "sensitive": True},
+        "hourly_rate": {"label": "时薪", "sensitive": True},
+        "perf_bonus": {"label": "绩效奖金", "sensitive": True},
+        "extra_bonus": {"label": "额外奖金", "sensitive": True},
+        "tax_mode": {"label": "税务方式", "sensitive": True},
+        "tax_no": {"label": "税号", "sensitive": True},
+        "tax_id": {"label": "税务ID", "sensitive": True},
+        "tax_class": {"label": "税务等级", "sensitive": True},
+        "ssn": {"label": "社保号", "sensitive": True},
+        "iban": {"label": "银行账户(IBAN)", "sensitive": True},
+        "health_insurance": {"label": "医疗保险", "sensitive": True},
+        "languages": {"label": "语言", "sensitive": False},
+        "special_skills": {"label": "特殊技能", "sensitive": False},
+        "contract_type": {"label": "合同类型", "sensitive": False},
+        "dispatch_type": {"label": "派遣类型", "sensitive": False},
+        "contract_start": {"label": "合同开始", "sensitive": False},
+        "contract_end": {"label": "合同结束", "sensitive": False},
+        "emergency_contact": {"label": "紧急联系人", "sensitive": True},
+        "emergency_phone": {"label": "紧急联系电话", "sensitive": True},
+        "work_permit_no": {"label": "工作许可号", "sensitive": True},
+        "work_permit_expiry": {"label": "工作许可到期", "sensitive": True},
+        "status": {"label": "状态", "sensitive": False},
+        "join_date": {"label": "入职日期", "sensitive": False},
+        "leave_date": {"label": "离职日期", "sensitive": False},
+    },
+    "suppliers": {
+        "id": {"label": "供应商ID", "sensitive": False},
+        "name": {"label": "名称", "sensitive": False},
+        "bank_name": {"label": "银行名称", "sensitive": True},
+        "bank_account": {"label": "银行账号", "sensitive": True},
+        "tax_handle": {"label": "税务处理", "sensitive": True},
+        "contact_name": {"label": "联系人", "sensitive": False},
+        "contact_phone": {"label": "联系电话", "sensitive": False},
+        "contact_email": {"label": "联系邮箱", "sensitive": False},
+    },
+}
+
+@app.get("/api/field-definitions/{module}")
+def get_field_definitions(module: str, user=Depends(get_user)):
+    """Get field definitions for a module, including labels and sensitivity markers.
+    Admin only endpoint for configuring field-level visibility."""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可查看字段定义")
+    fields = MODULE_FIELD_DEFINITIONS.get(module, {})
+    return {"module": module, "fields": fields}
+
 # ── Batch Import / Export ──
 
 def _check_permission(user, module: str, action: str):
@@ -1676,6 +1755,56 @@ def _check_permission(user, module: str, action: str):
         return False
     perm_dict = dict(perm)
     return bool(perm_dict.get(action, 0))
+
+def _get_hidden_fields(role: str, module: str) -> list:
+    """Get list of hidden fields for a role/module pair. Admin sees all fields."""
+    if role == "admin":
+        return []
+    db = database.get_db()
+    try:
+        perm = db.execute("SELECT hidden_fields FROM permission_overrides WHERE role=? AND module=?",
+                          (role, module)).fetchone()
+        if perm and perm["hidden_fields"]:
+            return [f.strip() for f in perm["hidden_fields"].split(",") if f.strip()]
+        return []
+    finally:
+        db.close()
+
+def _get_editable_fields(role: str, module: str) -> list:
+    """Get list of editable fields for a role/module pair. Empty means all editable (when permission allows)."""
+    if role == "admin":
+        return []  # empty = all editable for admin
+    db = database.get_db()
+    try:
+        perm = db.execute("SELECT editable_fields FROM permission_overrides WHERE role=? AND module=?",
+                          (role, module)).fetchone()
+        if perm and perm["editable_fields"]:
+            return [f.strip() for f in perm["editable_fields"].split(",") if f.strip()]
+        return []  # empty = all editable (based on can_edit permission)
+    finally:
+        db.close()
+
+def _filter_hidden_fields(rows: list, role: str, module: str) -> list:
+    """Filter out hidden fields from a list of row dicts based on role permissions.
+    Admin sees all fields. Returns rows with hidden fields removed."""
+    hidden = _get_hidden_fields(role, module)
+    if not hidden:
+        return rows
+    return [{k: v for k, v in row.items() if k not in hidden} for row in rows]
+
+def _enforce_editable_fields(data: dict, role: str, module: str) -> dict:
+    """Remove fields that the role is not allowed to edit.
+    If editable_fields is set, only those fields can be edited.
+    Admin can edit all fields. System fields (updated_at) are always allowed.
+    Returns filtered data dict."""
+    if role == "admin":
+        return data
+    editable = _get_editable_fields(role, module)
+    if not editable:
+        return data  # empty = all editable (based on can_edit permission)
+    # Always allow system-managed timestamp fields
+    system_fields = {"updated_at", "created_at"}
+    return {k: v for k, v in data.items() if k in editable or k in system_fields}
 
 # Field definitions for each exportable table (column order for import/export)
 TABLE_EXPORT_FIELDS = {

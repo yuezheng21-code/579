@@ -816,13 +816,28 @@ def seed_data():
         "sup": "own_supplier",
         "worker": "self_only",
     }
+    # Default hidden_fields per role per module for sensitive data protection
+    # Sensitive employee fields: birth_date, id_number, tax_no, tax_id, ssn, iban,
+    # base_salary, hourly_rate, health_insurance, emergency_contact, emergency_phone
+    role_hidden_fields = {
+        "admin": {},   # admin sees all
+        "ceo": {},     # CEO sees all
+        "mgr": {"employees": "tax_no,tax_id,ssn,iban,health_insurance"},
+        "hr": {"employees": "iban"},
+        "fin": {"employees": "birth_date,id_number,emergency_contact,emergency_phone,work_permit_no"},
+        "wh": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,emergency_contact,emergency_phone,work_permit_no"},
+        "sup": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,emergency_contact,emergency_phone,work_permit_no,address"},
+        "worker": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,emergency_contact,emergency_phone,work_permit_no,address,phone,email"},
+    }
     for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
         scope = role_data_scope.get(role, "all")
+        role_hf = role_hidden_fields.get(role, {})
         for mod in ALL_M:
+            hf = role_hf.get(mod, "")
             c.execute("""INSERT INTO permission_overrides(role,module,can_view,can_create,can_edit,can_delete,can_export,can_approve,can_import,hidden_fields,editable_fields,data_scope)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(role, module) DO NOTHING""",
-                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),"","",scope))
+                (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),hf,"",scope))
 
     # ── Warehouses (客户仓库 - 第三方劳务派遣) ──
     for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,""),
