@@ -2,6 +2,7 @@
 __pycache__/
 *.db
 .env
-/uploads/
+/uploads/*
+!/uploads/.gitkeep
 .DS_Store
 Thumbs.db
