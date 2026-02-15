@@ -33,7 +33,6 @@ static/uploads/
 .DS_Store
 
 # Distribution / packaging
-.Python
 build/
 develop-eggs/
 dist/
@@ -51,7 +50,6 @@ wheels/
 *.egg
 
 # PyInstaller
-*.manifest
 *.spec
 
 # Unit test / coverage reports
