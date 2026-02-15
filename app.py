@@ -314,7 +314,12 @@ def login(req: LoginReq):
     if not u or not verify_password(req.password, u["password_hash"]):
         raise HTTPException(401, "用户名或密码错误")
     token = make_token(u["username"], u["role"])
-    return {"token": token, "user": {"username": u["username"], "display_name": u["display_name"], "role": u["role"], "employee_id": u["employee_id"]}}
+    user_info = {"username": u["username"], "display_name": u["display_name"], "role": u["role"], "employee_id": u["employee_id"]}
+    if u["supplier_id"]:
+        user_info["supplier_id"] = u["supplier_id"]
+    if u["warehouse_code"]:
+        user_info["warehouse_code"] = u["warehouse_code"]
+    return {"token": token, "user": user_info}
 
 @app.post("/api/pin-login")
 def pin_login(req: PinReq):
@@ -327,7 +332,22 @@ def pin_login(req: PinReq):
 
 # ── Employees ──
 @app.get("/api/employees")
-def get_employees(user=Depends(get_user)): return q("employees")
+def get_employees(user=Depends(get_user)):
+    role = user.get("role", "worker")
+    # Supplier users can only see their own workers
+    if role == "sup" and user.get("supplier_id"):
+        return q("employees", "supplier_id=?", (user["supplier_id"],))
+    # Warehouse users can only see employees in their warehouse
+    if role == "wh" and user.get("warehouse_code"):
+        wh = user["warehouse_code"]
+        db = database.get_db()
+        rows = db.execute(
+            "SELECT * FROM employees WHERE primary_wh=? OR dispatch_whs LIKE ?",
+            (wh, f"%{wh}%")
+        ).fetchall()
+        db.close()
+        return [dict(r) for r in rows]
+    return q("employees")
 
 @app.get("/api/employees/{eid}")
 def get_employee(eid: str, user=Depends(get_user)):
@@ -370,8 +390,18 @@ def get_roster(
     user=Depends(get_user)
 ):
     """花名册接口 - 获取员工花名册列表，支持按状态、派遣类型、仓库、来源筛选"""
+    role = user.get("role", "worker")
     conditions = []
     params = []
+    # Data scope filtering for supplier users
+    if role == "sup" and user.get("supplier_id"):
+        conditions.append("e.supplier_id=?")
+        params.append(user["supplier_id"])
+    # Data scope filtering for warehouse users
+    if role == "wh" and user.get("warehouse_code"):
+        wh = user["warehouse_code"]
+        conditions.append("(e.primary_wh=? OR e.dispatch_whs LIKE ?)")
+        params.extend([wh, f"%{wh}%"])
     if status:
         conditions.append("e.status=?")
         params.append(status)
@@ -753,6 +783,91 @@ def get_supplier(sid: str, user=Depends(get_user)):
         raise HTTPException(404, "供应商不存在")
     return sups[0]
 
+@app.get("/api/supplier/worker-activities")
+def get_supplier_worker_activities(user=Depends(get_user)):
+    """获取供应商旗下所有工人的动态信息（工时、排班、出勤、请假等）
+    Supplier users see activities for their own workers;
+    Admin/HR/CEO/MGR can specify supplier_id as query param."""
+    role = user.get("role", "worker")
+    supplier_id = user.get("supplier_id")
+
+    # Non-supplier users with sufficient permissions can view any supplier's workers
+    if role in ("admin", "ceo", "hr", "mgr"):
+        # Allow admin/ceo/hr/mgr to view any supplier
+        supplier_id = supplier_id  # they see all if no supplier_id bound
+    elif role == "sup":
+        if not supplier_id:
+            raise HTTPException(403, "供应商账号未关联供应商")
+    else:
+        raise HTTPException(403, "无权限查看供应商工人动态")
+
+    db = database.get_db()
+
+    # Get supplier's workers
+    if supplier_id:
+        workers = db.execute(
+            "SELECT id, name, grade, position, primary_wh, status, phone FROM employees WHERE supplier_id=? ORDER BY primary_wh, grade",
+            (supplier_id,)
+        ).fetchall()
+    else:
+        workers = db.execute(
+            "SELECT id, name, grade, position, primary_wh, status, supplier_id, phone FROM employees WHERE source='供应商' ORDER BY supplier_id, primary_wh, grade"
+        ).fetchall()
+
+    worker_ids = [w["id"] for w in workers]
+    if not worker_ids:
+        db.close()
+        return {"workers": [], "timesheet": [], "leave_requests": [], "schedules": [], "summary": {}}
+
+    placeholders = ",".join(["?"] * len(worker_ids))
+
+    # Recent timesheet entries (last 30 days)
+    timesheet = db.execute(
+        f"SELECT * FROM timesheet WHERE employee_id IN ({placeholders}) AND work_date >= date('now', '-30 days') ORDER BY work_date DESC",
+        tuple(worker_ids)
+    ).fetchall()
+
+    # Active leave requests
+    leave_requests = db.execute(
+        f"SELECT * FROM leave_requests WHERE employee_id IN ({placeholders}) ORDER BY start_date DESC",
+        tuple(worker_ids)
+    ).fetchall()
+
+    # Upcoming schedules
+    schedules = db.execute(
+        f"SELECT * FROM schedules WHERE employee_id IN ({placeholders}) AND work_date >= date('now') ORDER BY work_date ASC",
+        tuple(worker_ids)
+    ).fetchall()
+
+    # Summary statistics
+    current_month = get_current_year_month()
+    summary = {
+        "total_workers": len(workers),
+        "active_workers": sum(1 for w in workers if w["status"] == "在职"),
+        "monthly_hours": db.execute(
+            f"SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE employee_id IN ({placeholders}) AND work_date LIKE ?",
+            tuple(worker_ids) + (f"{current_month}%",)
+        ).fetchone()[0],
+        "pending_leave": sum(1 for lr in leave_requests if lr["status"] == "待审批"),
+        "by_warehouse": [dict(r) for r in db.execute(
+            f"SELECT primary_wh, COUNT(*) c FROM employees WHERE id IN ({placeholders}) AND status='在职' GROUP BY primary_wh",
+            tuple(worker_ids)
+        ).fetchall()],
+        "by_grade": [dict(r) for r in db.execute(
+            f"SELECT grade, COUNT(*) c FROM employees WHERE id IN ({placeholders}) AND status='在职' GROUP BY grade",
+            tuple(worker_ids)
+        ).fetchall()],
+    }
+
+    db.close()
+    return {
+        "workers": [dict(w) for w in workers],
+        "timesheet": [dict(t) for t in timesheet],
+        "leave_requests": [dict(lr) for lr in leave_requests],
+        "schedules": [dict(s) for s in schedules],
+        "summary": summary,
+    }
+
 # ── Warehouses ──
 @app.get("/api/warehouses")
 def get_warehouses(user=Depends(get_user)): return q("warehouses", order="code ASC")
@@ -830,8 +945,15 @@ async def update_enterprise_doc(doc_id: str, request: Request, user=Depends(get_
 # ── Timesheet ──
 @app.get("/api/timesheet")
 def get_timesheet(employee_id: Optional[str] = None, user=Depends(get_user)):
+    role = user.get("role", "worker")
     if employee_id:
         return q("timesheet", "employee_id=?", (employee_id,), order="work_date DESC, employee_id ASC")
+    # Supplier users see only their workers' timesheet
+    if role == "sup" and user.get("supplier_id"):
+        return q("timesheet", "supplier_id=?", (user["supplier_id"],), order="work_date DESC, employee_id ASC")
+    # Warehouse users see only their warehouse timesheet
+    if role == "wh" and user.get("warehouse_code"):
+        return q("timesheet", "warehouse_code=?", (user["warehouse_code"],), order="work_date DESC, employee_id ASC")
     return q("timesheet", order="work_date DESC, employee_id ASC")
 
 @app.post("/api/timesheet")
@@ -1294,7 +1416,13 @@ def get_logs(user=Depends(get_user)): return q("audit_logs", order="id DESC", li
 # ── Settlement ──
 @app.get("/api/settlement")
 def get_settlement(mode: str = "own", user=Depends(get_user)):
+    role = user.get("role", "worker")
     db = database.get_db()
+    # Supplier users only see their own settlement data
+    if role == "sup" and user.get("supplier_id"):
+        sid = user["supplier_id"]
+        rows = db.execute("SELECT supplier_id,warehouse_code,COUNT(DISTINCT employee_id) hc,SUM(hours) h,SUM(hourly_pay) pay FROM timesheet WHERE supplier_id=? GROUP BY warehouse_code", (sid,)).fetchall()
+        db.close(); return [dict(r) for r in rows]
     if mode == "own":
         rows = db.execute("SELECT employee_id,employee_name,grade,warehouse_code,SUM(hours) h,SUM(hourly_pay) pay,SUM(ssi_deduct) ssi,SUM(tax_deduct) tax,SUM(net_pay) net FROM timesheet WHERE source='自有' GROUP BY employee_id").fetchall()
     elif mode == "supplier":
@@ -1308,6 +1436,46 @@ def get_settlement(mode: str = "own", user=Depends(get_user)):
 def dashboard(user=Depends(get_user)):
     db = database.get_db()
     current_year_month = get_current_year_month()
+    role = user.get("role", "worker")
+
+    # Supplier-scoped dashboard: only show their workers' data
+    if role == "sup" and user.get("supplier_id"):
+        sid = user["supplier_id"]
+        r = {
+            "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
+            "own": 0,
+            "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
+            "wh_count": db.execute("SELECT COUNT(DISTINCT primary_wh) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
+            "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests lr JOIN employees e ON lr.employee_id=e.id WHERE lr.status='待审批' AND e.supplier_id=?", (sid,)).fetchone()[0],
+            "pending_expense": 0,
+            "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE supplier_id=? AND wh_status='待仓库审批'", (sid,)).fetchone()[0],
+            "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE supplier_id=? AND work_date LIKE ?", (sid, f"{current_year_month}%")).fetchone()[0],
+            "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? GROUP BY grade ORDER BY grade", (sid,)).fetchall()],
+            "wh_dist": [dict(r) for r in db.execute("SELECT primary_wh w,COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? GROUP BY primary_wh", (sid,)).fetchall()],
+            "service_type_dist": [],
+            "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND supplier_id=? AND dispatch_type IS NOT NULL GROUP BY dispatch_type", (sid,)).fetchall()],
+        }
+        db.close(); return r
+
+    # Warehouse-scoped dashboard
+    if role == "wh" and user.get("warehouse_code"):
+        wh = user["warehouse_code"]
+        r = {
+            "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
+            "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
+            "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE source='供应商' AND status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
+            "wh_count": 1,
+            "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests WHERE warehouse_code=? AND status='待审批'", (wh,)).fetchone()[0],
+            "pending_expense": 0,
+            "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE warehouse_code=? AND wh_status='待仓库审批'", (wh,)).fetchone()[0],
+            "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE warehouse_code=? AND work_date LIKE ?", (wh, f"{current_year_month}%")).fetchone()[0],
+            "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) GROUP BY grade ORDER BY grade", (wh, f"%{wh}%")).fetchall()],
+            "wh_dist": [{"w": wh, "c": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0]}],
+            "service_type_dist": [],
+            "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) AND dispatch_type IS NOT NULL GROUP BY dispatch_type", (wh, f"%{wh}%")).fetchall()],
+        }
+        db.close(); return r
+
     r = {
         "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职'").fetchone()[0],
         "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职'").fetchone()[0],
@@ -1347,7 +1515,8 @@ def get_perms(user=Depends(get_user)): return q("permission_overrides", order="r
 @app.get("/api/permissions/check")
 def check_permissions(module: str, user=Depends(get_user)):
     """Check current user's permissions for a specific module.
-    Admin has god view (all permissions). CEO has near-full access."""
+    Admin has god view (all permissions). CEO has near-full access.
+    Returns data_scope for fine-grained data access control based on role, grade, department, warehouse."""
     role = user.get("role", "worker")
     # Admin always has full access (god view)
     if role == "admin":
@@ -1355,7 +1524,8 @@ def check_permissions(module: str, user=Depends(get_user)):
             "role": "admin", "module": module, "role_level": 100,
             "can_view": 1, "can_create": 1, "can_edit": 1, "can_delete": 1,
             "can_export": 1, "can_approve": 1, "can_import": 1,
-            "hidden_fields": "", "editable_fields": ""
+            "hidden_fields": "", "editable_fields": "",
+            "data_scope": "all", "scope_grades": "", "scope_departments": "", "scope_warehouses": ""
         }
     db = database.get_db()
     perm = db.execute("SELECT * FROM permission_overrides WHERE role=? AND module=?", (role, module)).fetchone()
@@ -1364,16 +1534,21 @@ def check_permissions(module: str, user=Depends(get_user)):
         return {"role": role, "module": module, "role_level": _get_role_level(role),
                 "can_view": 0, "can_create": 0, "can_edit": 0, "can_delete": 0,
                 "can_export": 0, "can_approve": 0, "can_import": 0,
-                "hidden_fields": "", "editable_fields": ""}
+                "hidden_fields": "", "editable_fields": "",
+                "data_scope": "self_only", "scope_grades": "", "scope_departments": "", "scope_warehouses": ""}
     result = dict(perm)
     result["role_level"] = _get_role_level(role)
     return result
 
 @app.get("/api/permissions/my")
 def get_my_permissions(user=Depends(get_user)):
-    """Get all permissions for the current user's role"""
+    """Get all permissions for the current user's role, including data scope and user context"""
     role = user.get("role", "worker")
     role_level = _get_role_level(role)
+    user_context = {
+        "supplier_id": user.get("supplier_id"),
+        "warehouse_code": user.get("warehouse_code"),
+    }
     if role == "admin":
         # Admin: god view, return all modules with full access
         db = database.get_db()
@@ -1381,10 +1556,12 @@ def get_my_permissions(user=Depends(get_user)):
         db.close()
         return {
             "role": "admin", "role_level": 100, "is_admin": True, "is_ceo": False,
+            "user_context": user_context,
             "permissions": {m["module"]: {
                 "can_view": 1, "can_create": 1, "can_edit": 1, "can_delete": 1,
                 "can_export": 1, "can_approve": 1, "can_import": 1,
-                "hidden_fields": "", "editable_fields": ""
+                "hidden_fields": "", "editable_fields": "",
+                "data_scope": "all", "scope_grades": "", "scope_departments": "", "scope_warehouses": ""
             } for m in modules}
         }
     db = database.get_db()
@@ -1393,6 +1570,7 @@ def get_my_permissions(user=Depends(get_user)):
     return {
         "role": role, "role_level": role_level,
         "is_admin": role == "admin", "is_ceo": role == "ceo",
+        "user_context": user_context,
         "permissions": {p["module"]: dict(p) for p in perms}
     }
 
@@ -1406,10 +1584,13 @@ async def update_perm(request: Request, user=Depends(get_user)):
         raise HTTPException(403, "仅管理员可修改权限设置")
     db = database.get_db()
     db.execute("""UPDATE permission_overrides SET can_view=?,can_create=?,can_edit=?,can_delete=?,
-        can_export=?,can_approve=?,can_import=?,hidden_fields=?,editable_fields=? WHERE role=? AND module=?""",
+        can_export=?,can_approve=?,can_import=?,hidden_fields=?,editable_fields=?,
+        data_scope=?,scope_grades=?,scope_departments=?,scope_warehouses=? WHERE role=? AND module=?""",
         (d.get("can_view",0),d.get("can_create",0),d.get("can_edit",0),d.get("can_delete",0),
          d.get("can_export",0),d.get("can_approve",0),d.get("can_import",0),
-         d.get("hidden_fields",""),d.get("editable_fields",""),d["role"],d["module"]))
+         d.get("hidden_fields",""),d.get("editable_fields",""),
+         d.get("data_scope","all"),d.get("scope_grades",""),d.get("scope_departments",""),d.get("scope_warehouses",""),
+         d["role"],d["module"]))
     db.commit(); db.close()
     audit_log(user.get("username", ""), "update", "permission_overrides", f"{d['role']}/{d['module']}", json.dumps(d))
     return {"ok": True}

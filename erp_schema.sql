@@ -317,6 +317,10 @@ CREATE TABLE IF NOT EXISTS permission_overrides (
     can_import INTEGER DEFAULT 0,
     hidden_fields TEXT DEFAULT '',
     editable_fields TEXT DEFAULT '',
+    data_scope TEXT DEFAULT 'all',
+    scope_grades TEXT DEFAULT '',
+    scope_departments TEXT DEFAULT '',
+    scope_warehouses TEXT DEFAULT '',
     updated_by TEXT, updated_at TEXT DEFAULT (datetime('now')),
     UNIQUE(role, module));
 
