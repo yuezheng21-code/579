@@ -8,3 +8,4 @@ __pycache__/
 !/uploads/.gitkeep
 .DS_Store
 Thumbs.db
+.pytest_cache/
