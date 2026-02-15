@@ -349,6 +349,71 @@ async def update_employee(eid: str, request: Request, user=Depends(get_user)):
     audit_log(user.get("username", ""), "update", "employees", eid, json.dumps(list(data.keys())))
     return {"ok": True}
 
+# ── Employee Roster (花名册) ──
+@app.get("/api/roster")
+def get_roster(
+    status: Optional[str] = None,
+    dispatch_type: Optional[str] = None,
+    warehouse_code: Optional[str] = None,
+    source: Optional[str] = None,
+    user=Depends(get_user)
+):
+    """花名册接口 - 获取员工花名册列表，支持按状态、派遣类型、仓库、来源筛选"""
+    conditions = []
+    params = []
+    if status:
+        conditions.append("e.status=?")
+        params.append(status)
+    if dispatch_type:
+        conditions.append("e.dispatch_type=?")
+        params.append(dispatch_type)
+    if warehouse_code:
+        conditions.append("(e.primary_wh=? OR e.dispatch_whs LIKE ?)")
+        params.extend([warehouse_code, f"%{warehouse_code}%"])
+    if source:
+        conditions.append("e.source=?")
+        params.append(source)
+    where = " AND ".join(conditions) if conditions else "1=1"
+
+    db = database.get_db()
+    rows = db.execute(f"""
+        SELECT e.*, s.name as supplier_name, w.name as warehouse_name, w.service_type
+        FROM employees e
+        LEFT JOIN suppliers s ON s.id = e.supplier_id
+        LEFT JOIN warehouses w ON w.code = e.primary_wh
+        WHERE {where}
+        ORDER BY e.id ASC
+    """, tuple(params)).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.get("/api/roster/stats")
+def get_roster_stats(user=Depends(get_user)):
+    """花名册统计 - 按派遣类型、合同类型、来源等统计"""
+    db = database.get_db()
+    stats = {
+        "by_dispatch_type": [dict(r) for r in db.execute(
+            "SELECT dispatch_type, COUNT(*) as count FROM employees WHERE status='在职' AND dispatch_type IS NOT NULL GROUP BY dispatch_type"
+        ).fetchall()],
+        "by_contract_type": [dict(r) for r in db.execute(
+            "SELECT contract_type, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY contract_type"
+        ).fetchall()],
+        "by_source": [dict(r) for r in db.execute(
+            "SELECT source, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY source"
+        ).fetchall()],
+        "by_nationality": [dict(r) for r in db.execute(
+            "SELECT nationality, COUNT(*) as count FROM employees WHERE status='在职' GROUP BY nationality"
+        ).fetchall()],
+        "contract_expiring_soon": [dict(r) for r in db.execute(
+            "SELECT id, name, contract_end, primary_wh FROM employees WHERE status='在职' AND contract_end IS NOT NULL AND contract_end <= date('now', '+90 days') ORDER BY contract_end ASC"
+        ).fetchall()],
+        "work_permit_expiring_soon": [dict(r) for r in db.execute(
+            "SELECT id, name, work_permit_expiry, nationality FROM employees WHERE status='在职' AND work_permit_expiry IS NOT NULL AND work_permit_expiry <= date('now', '+90 days') ORDER BY work_permit_expiry ASC"
+        ).fetchall()],
+    }
+    db.close()
+    return stats
+
 # ── Account Management ──
 @app.get("/api/accounts")
 def get_accounts(user=Depends(get_user)):
@@ -655,6 +720,27 @@ async def create_supplier(request: Request, user=Depends(get_user)):
         raise HTTPException(500, f"创建供应商失败: {str(e)}")
     audit_log(user.get("username", ""), "create", "suppliers", data["id"], f"创建供应商: {data.get('name','')}")
     return {"ok": True, "id": data["id"]}
+
+@app.put("/api/suppliers/{sid}")
+async def update_supplier(sid: str, request: Request, user=Depends(get_user)):
+    """更新供应商信息"""
+    data = await request.json()
+    data.pop("id", None)
+    data["updated_at"] = datetime.now().isoformat()
+    try:
+        update("suppliers", "id", sid, data)
+    except Exception as e:
+        raise HTTPException(500, f"更新供应商失败: {str(e)}")
+    audit_log(user.get("username", ""), "update", "suppliers", sid, json.dumps(list(data.keys())))
+    return {"ok": True}
+
+@app.get("/api/suppliers/{sid}")
+def get_supplier(sid: str, user=Depends(get_user)):
+    """获取单个供应商详情"""
+    sups = q("suppliers", "id=?", (sid,))
+    if not sups:
+        raise HTTPException(404, "供应商不存在")
+    return sups[0]
 
 # ── Warehouses ──
 @app.get("/api/warehouses")
@@ -1161,6 +1247,8 @@ def dashboard(user=Depends(get_user)):
         "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE work_date LIKE ?", (f"{current_year_month}%",)).fetchone()[0],
         "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' GROUP BY grade ORDER BY grade").fetchall()],
         "wh_dist": [dict(r) for r in db.execute("SELECT primary_wh w,COUNT(*) c FROM employees WHERE status='在职' GROUP BY primary_wh").fetchall()],
+        "service_type_dist": [dict(r) for r in db.execute("SELECT service_type, COUNT(*) c FROM warehouses WHERE service_type IS NOT NULL GROUP BY service_type").fetchall()],
+        "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND dispatch_type IS NOT NULL GROUP BY dispatch_type").fetchall()],
     }
     db.close(); return r
 
