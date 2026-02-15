@@ -1732,7 +1732,7 @@ async def test_permission_check_includes_data_scope(auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_permission_update_with_data_scope(auth_headers):
+async def test_permission_update_with_data_scope(auth_headers, wh_headers):
     """Admin should be able to update data_scope in permissions."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -1746,18 +1746,11 @@ async def test_permission_update_with_data_scope(auth_headers):
         assert r.status_code == 200
 
         # Verify the update
-        r2 = await ac.get("/api/permissions/check?module=employees", headers={
-            "Authorization": f"Bearer {make_wh_token()}"
-        })
+        r2 = await ac.get("/api/permissions/check?module=employees", headers=wh_headers)
         assert r2.status_code == 200
         data = r2.json()
         assert data["data_scope"] == "own_warehouse"
         assert data["scope_warehouses"] == "UNA,DHL"
-
-
-def make_wh_token():
-    from app import make_token
-    return make_token("wh", "wh")
 
 
 @pytest.mark.asyncio
