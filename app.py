@@ -1,7 +1,7 @@
 """渊博+579 HR V6 — FastAPI Backend (Enhanced with Account Management & Warehouse Salary)"""
 import os, json, uuid, shutil, secrets, string, traceback, threading, logging, sys, copy, time, hashlib, hmac, base64
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -15,6 +15,10 @@ UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
+
+# German labor law compliance limits (ArbZG)
+MAX_DAILY_HOURS = 10   # §3 ArbZG: max 10 hours per day
+MAX_WEEKLY_HOURS = 48   # §3 ArbZG: max 48 hours per week (average)
 
 _db_ready = False
 
@@ -143,7 +147,9 @@ ALLOWED_TABLES = {
     "grade_levels", "grade_evaluations", "promotion_applications",
     "bonus_applications", "quotation_templates", "quotation_records",
     "employee_files", "leave_types", "talent_pool", "recruit_progress",
-    "schedules", "messages", "permission_overrides", "enterprise_documents"
+    "schedules", "messages", "permission_overrides", "enterprise_documents",
+    "safety_incidents", "id_naming_rules", "payslips", "payroll_confirmations",
+    "dispatch_transfers"
 }
 
 # Table-specific allowed order columns for validation
@@ -178,6 +184,11 @@ TABLE_ORDER_COLUMNS = {
     "messages": ["id", "created_at", "timestamp"],
     "permission_overrides": ["id", "role", "module"],
     "enterprise_documents": ["id", "created_at", "updated_at", "category", "title"],
+    "safety_incidents": ["id", "created_at", "updated_at", "incident_date", "status"],
+    "id_naming_rules": ["id", "updated_at"],
+    "payslips": ["id", "created_at", "month", "employee_id"],
+    "payroll_confirmations": ["id", "created_at", "month"],
+    "dispatch_transfers": ["id", "created_at", "dispatch_date"],
 }
 
 def _validate_table_name(table: str):
@@ -830,11 +841,33 @@ async def create_timesheet(request: Request, user=Depends(get_user)):
         raise HTTPException(400, "员工ID、工作日期和仓库编码不能为空")
     if "id" not in data: data["id"] = f"WT-{uuid.uuid4().hex[:8]}"
 
-    # 检查是否已存在相同的工时记录
+    # ── German labor law compliance checks ──
+    hours = float(data.get("hours", 0))
+    if hours > MAX_DAILY_HOURS:
+        raise HTTPException(400, f"根据德国劳动法(ArbZG)，每日工作时间不得超过{MAX_DAILY_HOURS}小时 / Tägliche Arbeitszeit darf {MAX_DAILY_HOURS} Stunden nicht überschreiten")
+
     employee_id = data.get("employee_id")
     work_date = data.get("work_date")
     warehouse_code = data.get("warehouse_code")
-    
+
+    # Check weekly hours compliance (max 48h/week per German law)
+    if employee_id and work_date:
+        db = database.get_db()
+        from datetime import date as dt_date
+        parts = work_date.split("-")
+        d = dt_date(int(parts[0]), int(parts[1]), int(parts[2]))
+        week_start = (d - timedelta(days=d.weekday())).isoformat()
+        week_end = (d + timedelta(days=6 - d.weekday())).isoformat()
+        weekly = db.execute(
+            "SELECT COALESCE(SUM(hours),0) as total FROM timesheet WHERE employee_id=? AND work_date>=? AND work_date<=?",
+            (employee_id, week_start, week_end)
+        ).fetchone()
+        weekly_total = (weekly["total"] if weekly else 0) + hours
+        db.close()
+        if weekly_total > MAX_WEEKLY_HOURS:
+            raise HTTPException(400, f"该员工本周已工作{weekly_total-hours}小时，加上本次{hours}小时共{weekly_total}小时，超过德国劳动法{MAX_WEEKLY_HOURS}小时/周上限 / Wöchentliche Arbeitszeit würde {MAX_WEEKLY_HOURS} Stunden überschreiten")
+
+    # 检查是否已存在相同的工时记录
     if employee_id and work_date and warehouse_code:
         db = database.get_db()
         existing = db.execute("""
@@ -907,16 +940,36 @@ def get_payroll_summary(month: Optional[str] = None, user=Depends(get_user)):
 
 @app.post("/api/timesheet/batch-approve")
 async def batch_approve(request: Request, user=Depends(get_user)):
+    """
+    多级审批工时记录:
+    type=leader  班组长审批: 待班组长审批 → 已班组长审批
+    type=wh      驻仓经理审批: 已班组长审批 → 已仓库审批
+    type=regional 区域经理审批: 已仓库审批 → 已区域审批
+    type=fin     财务确认: 已区域审批 → 已入账
+    """
     body = await request.json()
     db = database.get_db()
+    approve_type = body.get("type", "wh")
+    now_ts = datetime.now().isoformat()
+    approver = user.get("display_name", "")
     try:
         for tid in body.get("ids", []):
-            if body.get("type") == "wh":
-                db.execute("UPDATE timesheet SET wh_status='已仓库审批',wh_approver=?,wh_approve_time=? WHERE id=?",
-                           (user.get("display_name",""), datetime.now().isoformat(), tid))
+            if approve_type == "leader":
+                db.execute(
+                    "UPDATE timesheet SET wh_status='已班组长审批',leader_approver=?,leader_approve_time=? WHERE id=?",
+                    (approver, now_ts, tid))
+            elif approve_type == "wh":
+                db.execute(
+                    "UPDATE timesheet SET wh_status='已仓库审批',wh_approver=?,wh_approve_time=? WHERE id=?",
+                    (approver, now_ts, tid))
+            elif approve_type == "regional":
+                db.execute(
+                    "UPDATE timesheet SET wh_status='已区域审批',regional_approver=?,regional_approve_time=? WHERE id=?",
+                    (approver, now_ts, tid))
             else:
-                db.execute("UPDATE timesheet SET wh_status='已入账',fin_approver=?,fin_approve_time=? WHERE id=?",
-                           (user.get("display_name",""), datetime.now().isoformat(), tid))
+                db.execute(
+                    "UPDATE timesheet SET wh_status='已入账',fin_approver=?,fin_approve_time=? WHERE id=?",
+                    (approver, now_ts, tid))
         db.commit()
         return {"ok": True}
     except Exception as e:
@@ -1654,6 +1707,444 @@ async def upload_file(file: UploadFile = File(...), category: str = Form("genera
     content = await file.read()
     with open(path, "wb") as f: f.write(content)
     return {"filename": fname, "url": f"/uploads/{fname}", "size": len(content)}
+
+# ── Payslips - 工资条 ──
+@app.get("/api/payslips")
+def get_payslips(month: Optional[str] = None, employee_id: Optional[str] = None, user=Depends(get_user)):
+    """获取工资条列表"""
+    db = database.get_db()
+    sql = "SELECT * FROM payslips WHERE 1=1"
+    params: list = []
+    if month:
+        sql += " AND month=?"
+        params.append(month)
+    if employee_id:
+        sql += " AND employee_id=?"
+        params.append(employee_id)
+    sql += " ORDER BY month DESC, employee_name ASC"
+    rows = db.execute(sql, params).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/payslips/generate")
+async def generate_payslips(request: Request, user=Depends(get_user)):
+    """根据工时记录生成指定月份的工资条"""
+    body = await request.json()
+    month = body.get("month", datetime.now().strftime("%Y-%m"))
+    db = database.get_db()
+    try:
+        rows = db.execute("""
+            SELECT t.employee_id, e.name,
+                   SUM(t.hours) AS total_hours,
+                   SUM(t.hourly_pay) AS hourly_pay,
+                   SUM(t.piece_pay) AS piece_pay,
+                   SUM(t.perf_bonus) AS perf_bonus,
+                   SUM(t.other_fee) AS other_bonus,
+                   SUM(t.hourly_pay + t.piece_pay + t.perf_bonus + t.other_fee) AS gross_pay,
+                   SUM(t.ssi_deduct) AS ssi_deduct,
+                   SUM(t.tax_deduct) AS tax_deduct,
+                   SUM(t.net_pay) AS net_pay
+            FROM timesheet t
+            JOIN employees e ON t.employee_id = e.id
+            WHERE t.work_date LIKE ? || '%'
+            GROUP BY t.employee_id
+        """, (month,)).fetchall()
+        count = 0
+        for r in rows:
+            pid = str(uuid.uuid4())
+            db.execute("""
+                INSERT OR REPLACE INTO payslips
+                (id, employee_id, employee_name, month, total_hours, hourly_pay,
+                 piece_pay, perf_bonus, other_bonus, gross_pay, ssi_deduct, tax_deduct,
+                 other_deduct, net_pay, status, generated_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,'待确认',?)
+            """, (pid, r["employee_id"], r["name"], month,
+                  r["total_hours"], r["hourly_pay"], r["piece_pay"],
+                  r["perf_bonus"], r["other_bonus"], r["gross_pay"],
+                  r["ssi_deduct"], r["tax_deduct"], r["net_pay"],
+                  user.get("display_name", "")))
+            count += 1
+        db.commit()
+        return {"ok": True, "count": count, "month": month}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"生成工资条失败: {str(e)}")
+    finally:
+        db.close()
+
+@app.get("/api/mypage/payslips")
+def get_my_payslips(user=Depends(get_user)):
+    """获取当前员工的工资条"""
+    eid = user.get("employee_id")
+    if not eid:
+        return []
+    db = database.get_db()
+    rows = db.execute(
+        "SELECT * FROM payslips WHERE employee_id=? ORDER BY month DESC", (eid,)
+    ).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/payslips/{payslip_id}/confirm")
+async def confirm_payslip(payslip_id: str, user=Depends(get_user)):
+    """员工确认工资条"""
+    db = database.get_db()
+    try:
+        db.execute(
+            "UPDATE payslips SET confirmed_by_employee=1, confirmed_at=?, status='已确认' WHERE id=?",
+            (datetime.now().isoformat(), payslip_id))
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+# ── Salary Disputes - 薪资申诉 ──
+@app.post("/api/payslips/{payslip_id}/dispute")
+async def create_dispute(payslip_id: str, request: Request, user=Depends(get_user)):
+    """员工对工资条提出申诉"""
+    body = await request.json()
+    reason = body.get("reason", "")
+    db = database.get_db()
+    try:
+        db.execute(
+            "UPDATE payslips SET status='申诉中', notes=? WHERE id=?",
+            (reason, payslip_id))
+        db.commit()
+        audit_log(user.get("username", ""), "salary_dispute", "payslips", payslip_id, reason)
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+@app.post("/api/timesheet/{ts_id}/dispute")
+async def create_timesheet_dispute(ts_id: str, request: Request, user=Depends(get_user)):
+    """员工对工时记录提出申诉"""
+    body = await request.json()
+    reason = body.get("reason", "")
+    db = database.get_db()
+    try:
+        db.execute(
+            "UPDATE timesheet SET dispute_status='申诉中', dispute_reason=? WHERE id=?",
+            (reason, ts_id))
+        db.commit()
+        audit_log(user.get("username", ""), "timesheet_dispute", "timesheet", ts_id, reason)
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+@app.post("/api/timesheet/{ts_id}/dispute-reply")
+async def reply_timesheet_dispute(ts_id: str, request: Request, user=Depends(get_user)):
+    """管理层回复工时申诉"""
+    body = await request.json()
+    reply = body.get("reply", "")
+    status = body.get("status", "已处理")
+    db = database.get_db()
+    try:
+        db.execute(
+            "UPDATE timesheet SET dispute_status=?, dispute_reply=? WHERE id=?",
+            (status, reply, ts_id))
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+# ── Payroll Confirmation Flow - 工资确认流程 ──
+@app.get("/api/payroll-confirmations")
+def get_payroll_confirmations(month: Optional[str] = None, user=Depends(get_user)):
+    """获取工资确认流程状态"""
+    db = database.get_db()
+    if month:
+        rows = db.execute("SELECT * FROM payroll_confirmations WHERE month=? ORDER BY created_at", (month,)).fetchall()
+    else:
+        rows = db.execute("SELECT * FROM payroll_confirmations ORDER BY month DESC, created_at").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/payroll-confirmations")
+async def approve_payroll(request: Request, user=Depends(get_user)):
+    """
+    工资多级确认: step = leader/wh_manager/regional_manager/finance
+    班组长 → 驻仓经理 → 区域经理 → 财务总监
+    """
+    body = await request.json()
+    month = body.get("month", datetime.now().strftime("%Y-%m"))
+    step = body.get("step")
+    notes = body.get("notes", "")
+    if step not in ("leader", "wh_manager", "regional_manager", "finance"):
+        raise HTTPException(400, "无效的审批步骤")
+    db = database.get_db()
+    try:
+        pid = str(uuid.uuid4())
+        db.execute("""
+            INSERT OR REPLACE INTO payroll_confirmations (id, month, step, status, approver, approve_time, notes)
+            VALUES (?, ?, ?, '已审批', ?, ?, ?)
+        """, (pid, month, step, user.get("display_name", ""), datetime.now().isoformat(), notes))
+        db.commit()
+        return {"ok": True, "month": month, "step": step}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+@app.get("/api/payroll-preview")
+def get_payroll_preview(month: Optional[str] = None, user=Depends(get_user)):
+    """发薪前预览报表：汇总月度工资数据供财务核对"""
+    if not month:
+        month = datetime.now().strftime("%Y-%m")
+    db = database.get_db()
+    rows = db.execute("""
+        SELECT t.employee_id, e.name, e.grade, e.primary_wh,
+               COUNT(DISTINCT t.work_date) AS work_days,
+               SUM(t.hours) AS total_hours,
+               SUM(t.hourly_pay) AS total_hourly,
+               SUM(t.piece_pay) AS total_piece,
+               SUM(t.perf_bonus) AS total_perf,
+               SUM(t.other_fee) AS total_other,
+               SUM(t.hourly_pay + t.piece_pay + t.perf_bonus + t.other_fee) AS gross_pay,
+               SUM(t.ssi_deduct) AS total_ssi,
+               SUM(t.tax_deduct) AS total_tax,
+               SUM(t.net_pay) AS net_pay,
+               t.wh_status
+        FROM timesheet t
+        JOIN employees e ON t.employee_id = e.id
+        WHERE t.work_date LIKE ? || '%'
+        GROUP BY t.employee_id
+        ORDER BY e.grade ASC, e.name ASC
+    """, (month,)).fetchall()
+    # Get confirmation status for this month
+    confirmations = db.execute(
+        "SELECT step, status, approver, approve_time FROM payroll_confirmations WHERE month=?", (month,)
+    ).fetchall()
+    db.close()
+    return {
+        "month": month,
+        "employees": [dict(r) for r in rows],
+        "confirmations": [dict(c) for c in confirmations],
+        "total_count": len(rows),
+        "total_gross": sum(r["gross_pay"] or 0 for r in rows),
+        "total_net": sum(r["net_pay"] or 0 for r in rows)
+    }
+
+# ── Safety Incidents & Complaints - 安全事件与投诉 ──
+@app.get("/api/safety-incidents")
+def get_safety_incidents(warehouse_code: Optional[str] = None, status: Optional[str] = None, user=Depends(get_user)):
+    db = database.get_db()
+    sql = "SELECT * FROM safety_incidents WHERE 1=1"
+    params = []
+    if warehouse_code:
+        sql += " AND warehouse_code=?"
+        params.append(warehouse_code)
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    sql += " ORDER BY created_at DESC"
+    rows = db.execute(sql, params).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.post("/api/safety-incidents")
+async def create_safety_incident(request: Request, user=Depends(get_user)):
+    data = await request.json()
+    if not data.get("description"):
+        raise HTTPException(400, "事件描述不能为空")
+    if "id" not in data:
+        data["id"] = f"SI-{uuid.uuid4().hex[:8]}"
+    data.setdefault("incident_type", "安全事件")
+    data.setdefault("severity", "一般")
+    data.setdefault("status", "待处理")
+    data.setdefault("reported_by", user.get("display_name", ""))
+    data.setdefault("reported_date", datetime.now().strftime("%Y-%m-%d"))
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+    try:
+        insert("safety_incidents", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建安全事件失败: {str(e)}")
+    audit_log(user.get("username", ""), "create", "safety_incidents", data["id"], data.get("description", ""))
+    return {"ok": True, "id": data["id"]}
+
+@app.put("/api/safety-incidents/{incident_id}")
+async def update_safety_incident(incident_id: str, request: Request, user=Depends(get_user)):
+    data = await request.json()
+    data["updated_at"] = datetime.now().isoformat()
+    if data.get("status") == "已解决" and not data.get("resolved_date"):
+        data["resolved_date"] = datetime.now().strftime("%Y-%m-%d")
+    db = database.get_db()
+    sets = ", ".join(f"{k}=?" for k in data)
+    vals = list(data.values()) + [incident_id]
+    db.execute(f"UPDATE safety_incidents SET {sets} WHERE id=?", vals)
+    db.commit(); db.close()
+    audit_log(user.get("username", ""), "update", "safety_incidents", incident_id, json.dumps(data, ensure_ascii=False))
+    return {"ok": True}
+
+# ── Org Chart - 组织架构 ──
+@app.get("/api/org-chart")
+def get_org_chart(user=Depends(get_user)):
+    """获取组织架构数据，按职级层级和仓库分组"""
+    db = database.get_db()
+    employees = db.execute(
+        "SELECT id, name, grade, position, primary_wh, source, supplier_id, status FROM employees WHERE status='在职' ORDER BY grade DESC, name"
+    ).fetchall()
+    warehouses = db.execute("SELECT code, name FROM warehouses").fetchall()
+    db.close()
+
+    grade_order = {"P9":0,"P8":1,"P7":2,"P6":3,"P5":4,"P4":5,"P3":6,"P2":7,"P1":8,"P0":9,
+                   "M5":0,"M4":1,"M3":2,"M2":3,"M1":4}
+    grade_titles = {
+        "P9":"运营总监","P8":"区域经理","P7":"驻仓经理","P6":"副经理",
+        "P5":"班组长","P4":"组长","P3":"技能工","P2":"资深操作员","P1":"操作员","P0":"供应商工人",
+        "M5":"总监","M4":"高级经理","M3":"经理","M2":"主管","M1":"专员"
+    }
+
+    wh_map = {w["code"]: w["name"] for w in warehouses}
+    emp_list = [dict(e) for e in employees]
+    for e in emp_list:
+        e["grade_order"] = grade_order.get(e["grade"], 99)
+        e["grade_title"] = grade_titles.get(e["grade"], e["grade"])
+
+    # Group by warehouse
+    by_wh = {}
+    for e in emp_list:
+        wh = e.get("primary_wh") or "未分配"
+        if wh not in by_wh:
+            by_wh[wh] = {"code": wh, "name": wh_map.get(wh, wh), "employees": []}
+        by_wh[wh]["employees"].append(e)
+
+    # Sort each warehouse group by grade
+    for wh_data in by_wh.values():
+        wh_data["employees"].sort(key=lambda x: x["grade_order"])
+
+    # Build hierarchy levels
+    levels = [
+        {"grade": "P9", "title": "运营总监 / Betriebsleiter", "employees": [e for e in emp_list if e["grade"] == "P9"]},
+        {"grade": "P8", "title": "区域经理 / Regionalleiter", "employees": [e for e in emp_list if e["grade"] == "P8"]},
+        {"grade": "P7", "title": "驻仓经理 / Lagerleiter", "employees": [e for e in emp_list if e["grade"] == "P7"]},
+        {"grade": "P5/P6", "title": "班组长 / Schichtleiter", "employees": [e for e in emp_list if e["grade"] in ("P5", "P6")]},
+        {"grade": "P4", "title": "组长 / Teamleiter", "employees": [e for e in emp_list if e["grade"] == "P4"]},
+        {"grade": "P2/P3", "title": "小组长/技能工 / Facharbeiter", "employees": [e for e in emp_list if e["grade"] in ("P2", "P3")]},
+        {"grade": "P0/P1", "title": "操作员 / Bediener", "employees": [e for e in emp_list if e["grade"] in ("P0", "P1")]},
+    ]
+
+    return {
+        "levels": levels,
+        "by_warehouse": list(by_wh.values()),
+        "total": len(emp_list)
+    }
+
+# ── Employee Self-Registration - 新员工自助申报 ──
+@app.post("/api/employee-register")
+async def employee_self_register(request: Request):
+    """新员工在线填写申报表格，无需登录。系统自动生成员工档案。
+    Neue Mitarbeiter-Selbstregistrierung / New employee self-registration"""
+    data = await request.json()
+    if not data.get("name") and not (data.get("family_name") and data.get("given_name")):
+        raise HTTPException(400, "姓名不能为空 / Name darf nicht leer sein")
+
+    # Auto-generate employee ID from naming rules
+    db = database.get_db()
+    rule = db.execute("SELECT * FROM id_naming_rules WHERE id='default'").fetchone()
+    if rule:
+        prefix = rule["prefix"]
+        sep = rule["separator"]
+        next_num = rule["next_number"]
+        pad = rule["padding"]
+        eid = f"{prefix}{sep}{str(next_num).zfill(pad)}"
+        db.execute("UPDATE id_naming_rules SET next_number=? WHERE id='default'", (next_num + 1,))
+        db.commit()
+    else:
+        eid = f"YB-{uuid.uuid4().hex[:6].upper()}"
+    db.close()
+
+    # Build name from family_name + given_name if name not provided
+    if not data.get("name"):
+        data["name"] = f"{data.get('family_name', '')} {data.get('given_name', '')}".strip()
+
+    data["id"] = eid
+    data.setdefault("status", "在职")
+    data.setdefault("grade", "P1")
+    data.setdefault("position", "库内")
+    data.setdefault("source", "自有")
+    data.setdefault("tax_mode", "我方报税")
+    data.setdefault("join_date", datetime.now().strftime("%Y-%m-%d"))
+    data.setdefault("created_at", datetime.now().isoformat())
+    data.setdefault("updated_at", datetime.now().isoformat())
+
+    try:
+        insert("employees", data)
+    except Exception as e:
+        raise HTTPException(500, f"创建员工失败: {str(e)}")
+
+    return {"ok": True, "id": eid, "message": f"员工档案已创建 / Mitarbeiterakte erstellt: {eid}"}
+
+# ── ID Naming Rules - 员工ID命名规则 ──
+@app.get("/api/id-naming-rules")
+def get_id_naming_rules(user=Depends(get_user)):
+    db = database.get_db()
+    rows = db.execute("SELECT * FROM id_naming_rules").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+@app.put("/api/id-naming-rules")
+async def update_id_naming_rules(request: Request, user=Depends(get_user)):
+    """管理员修改员工ID命名规则"""
+    data = await request.json()
+    data["updated_by"] = user.get("username", "")
+    data["updated_at"] = datetime.now().isoformat()
+    db = database.get_db()
+    db.execute(
+        "UPDATE id_naming_rules SET prefix=?, separator=?, next_number=?, padding=?, description=?, updated_by=?, updated_at=? WHERE id='default'",
+        (data.get("prefix", "YB"), data.get("separator", "-"), data.get("next_number", 1),
+         data.get("padding", 3), data.get("description", ""), data["updated_by"], data["updated_at"])
+    )
+    db.commit(); db.close()
+    audit_log(user.get("username", ""), "update", "id_naming_rules", "default", json.dumps(data, ensure_ascii=False))
+    return {"ok": True}
+
+# ── Compliance Check - 合规检查 ──
+@app.get("/api/compliance/work-hours")
+def check_work_hours_compliance(month: Optional[str] = None, user=Depends(get_user)):
+    """检查员工工时是否符合德国劳动法 / Überprüfung der Arbeitszeitkonformität"""
+    if not month:
+        month = datetime.now().strftime("%Y-%m")
+    db = database.get_db()
+    # Check daily violations (>10h)
+    daily_violations = db.execute("""
+        SELECT employee_id, employee_name, work_date, warehouse_code, hours
+        FROM timesheet WHERE work_date LIKE ? || '%' AND hours > 10
+        ORDER BY work_date, employee_id
+    """, (month,)).fetchall()
+    # Check weekly totals
+    weekly_data = db.execute("""
+        SELECT employee_id, employee_name,
+               strftime('%%W', work_date) as week_num,
+               SUM(hours) as total_hours,
+               COUNT(*) as work_days
+        FROM timesheet WHERE work_date LIKE ? || '%'
+        GROUP BY employee_id, week_num
+        HAVING total_hours > 48
+        ORDER BY total_hours DESC
+    """, (month,)).fetchall()
+    db.close()
+    return {
+        "month": month,
+        "daily_violations": [dict(r) for r in daily_violations],
+        "weekly_violations": [dict(r) for r in weekly_data],
+        "daily_count": len(daily_violations),
+        "weekly_count": len(weekly_data),
+        "compliant": len(daily_violations) == 0 and len(weekly_data) == 0
+    }
 
 # ── PWA Manifest ──
 @app.get("/manifest.json")

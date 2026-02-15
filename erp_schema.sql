@@ -162,6 +162,7 @@ CREATE TABLE IF NOT EXISTS employees (
     emergency_phone TEXT,                    -- 紧急联系人电话
     work_permit_no TEXT,                     -- 工作许可证号
     work_permit_expiry TEXT,                 -- 工作许可证到期日
+    work_hours_per_week REAL DEFAULT 40,     -- 每周工作小时数
     annual_leave_days REAL DEFAULT 20, sick_leave_days REAL DEFAULT 30,
     status TEXT DEFAULT '在职', join_date TEXT, leave_date TEXT, pin TEXT,
     file_folder TEXT, has_account INTEGER DEFAULT 0,
@@ -239,10 +240,13 @@ CREATE TABLE IF NOT EXISTS timesheet (
     perf_bonus REAL DEFAULT 0, other_fee REAL DEFAULT 0,
     ssi_deduct REAL DEFAULT 0, tax_deduct REAL DEFAULT 0, net_pay REAL DEFAULT 0,
     container_no TEXT, container_type TEXT, paper_photo TEXT,
-    wh_status TEXT DEFAULT '待仓库审批',
+    wh_status TEXT DEFAULT '待班组长审批',
+    leader_approver TEXT, leader_approve_time TEXT,
     wh_approver TEXT, wh_approve_time TEXT,
+    regional_approver TEXT, regional_approve_time TEXT,
     fin_approver TEXT, fin_approve_time TEXT,
     booked INTEGER DEFAULT 0, notes TEXT,
+    dispute_status TEXT, dispute_reason TEXT, dispute_reply TEXT,
     created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')));
 
 -- ── Container Records ──
@@ -357,6 +361,73 @@ CREATE TABLE IF NOT EXISTS enterprise_documents (
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')));
 
+-- ── Payslips - 工资条 ──
+CREATE TABLE IF NOT EXISTS payslips (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    employee_name TEXT,
+    month TEXT NOT NULL,
+    total_hours REAL DEFAULT 0,
+    hourly_pay REAL DEFAULT 0,
+    piece_pay REAL DEFAULT 0,
+    perf_bonus REAL DEFAULT 0,
+    other_bonus REAL DEFAULT 0,
+    gross_pay REAL DEFAULT 0,
+    ssi_deduct REAL DEFAULT 0,
+    tax_deduct REAL DEFAULT 0,
+    other_deduct REAL DEFAULT 0,
+    net_pay REAL DEFAULT 0,
+    status TEXT DEFAULT '待确认',
+    confirmed_by_employee INTEGER DEFAULT 0,
+    confirmed_at TEXT,
+    generated_by TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')));
+
+-- ── Payroll Confirmations - 工资确认流程 ──
+CREATE TABLE IF NOT EXISTS payroll_confirmations (
+    id TEXT PRIMARY KEY,
+    month TEXT NOT NULL,
+    step TEXT NOT NULL,
+    status TEXT DEFAULT '待审批',
+    approver TEXT,
+    approve_time TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(month, step));
+
+-- ── Safety Incidents & Complaints - 安全事件与投诉 ──
+CREATE TABLE IF NOT EXISTS safety_incidents (
+    id TEXT PRIMARY KEY,
+    incident_type TEXT NOT NULL DEFAULT '安全事件',
+    severity TEXT DEFAULT '一般',
+    warehouse_code TEXT,
+    reported_by TEXT,
+    reported_date TEXT,
+    incident_date TEXT,
+    description TEXT,
+    involved_employees TEXT,
+    root_cause TEXT,
+    corrective_action TEXT,
+    status TEXT DEFAULT '待处理',
+    handler TEXT,
+    resolved_date TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')));
+
+-- ── ID Naming Rules - 员工ID命名规则 ──
+CREATE TABLE IF NOT EXISTS id_naming_rules (
+    id TEXT PRIMARY KEY,
+    prefix TEXT NOT NULL DEFAULT 'YB',
+    separator TEXT DEFAULT '-',
+    next_number INTEGER DEFAULT 1,
+    padding INTEGER DEFAULT 3,
+    description TEXT,
+    updated_by TEXT,
+    updated_at TEXT DEFAULT (datetime('now')));
+
 -- ============================================================================
 -- Indexes for Better Performance and Data Integrity
 -- ============================================================================
@@ -365,3 +436,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_timesheet_unique ON timesheet(employee_id,
 CREATE INDEX IF NOT EXISTS idx_timesheet_date ON timesheet(work_date);
 CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
 CREATE INDEX IF NOT EXISTS idx_users_employee ON users(employee_id);
+CREATE INDEX IF NOT EXISTS idx_safety_incidents_status ON safety_incidents(status);
