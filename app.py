@@ -117,10 +117,23 @@ ALLOWED_TABLES = {
     "dispatch_needs", "container_tasks", "audit_logs"
 }
 
-# Whitelist of allowed column names for ordering
-ALLOWED_ORDER_COLUMNS = {
-    "rowid", "id", "created_at", "updated_at", "work_date", "employee_id",
-    "warehouse_code", "grade", "name", "status", "start_date", "end_date"
+# Table-specific allowed order columns for validation
+TABLE_ORDER_COLUMNS = {
+    "employees": ["rowid", "id", "created_at", "updated_at", "name", "grade", "status"],
+    "users": ["rowid", "id", "created_at", "username"],
+    "timesheet": ["rowid", "id", "created_at", "updated_at", "work_date", "employee_id"],
+    "leave_requests": ["rowid", "id", "created_at", "start_date", "end_date"],
+    "expense_claims": ["rowid", "id", "created_at", "status"],
+    "performance_reviews": ["rowid", "id", "created_at"],
+    "warehouses": ["rowid", "id", "code", "name"],
+    "suppliers": ["rowid", "id", "name"],
+    "business_lines": ["rowid", "id", "name"],
+    "employee_grades": ["rowid", "id", "grade"],
+    "warehouse_salary_config": ["rowid", "id", "created_at", "updated_at", "warehouse_code", "grade"],
+    "leave_balances": ["rowid", "id", "employee_id"],
+    "dispatch_needs": ["rowid", "id", "created_at"],
+    "container_tasks": ["rowid", "id", "created_at"],
+    "audit_logs": ["rowid", "id", "timestamp"],
 }
 
 def _validate_table_name(table: str):
@@ -129,7 +142,7 @@ def _validate_table_name(table: str):
         raise HTTPException(400, f"Invalid table name: {table}")
     return table
 
-def _validate_order_clause(order: str):
+def _validate_order_clause(order: str, table: str):
     """Validate ORDER BY clause to prevent SQL injection"""
     # Allow simple column names with optional DESC/ASC
     pattern = r'^(\w+)(\s+(DESC|ASC))?$'
@@ -138,14 +151,16 @@ def _validate_order_clause(order: str):
         raise HTTPException(400, f"Invalid order clause: {order}")
     
     column = match.group(1)
-    if column not in ALLOWED_ORDER_COLUMNS:
-        raise HTTPException(400, f"Invalid order column: {column}")
+    # Check if column is allowed for this specific table
+    allowed_cols = TABLE_ORDER_COLUMNS.get(table, ["rowid", "id"])
+    if column not in allowed_cols:
+        raise HTTPException(400, f"Invalid order column '{column}' for table '{table}'")
     
     return order
 
 def q(table, where="1=1", params=(), order="rowid DESC", limit=500):
     _validate_table_name(table)
-    _validate_order_clause(order)
+    _validate_order_clause(order, table)
     
     # Ensure limit is an integer
     try:
@@ -194,9 +209,10 @@ def audit_log(username: str, action: str, resource_type: str, resource_id: str, 
         """, (username, action, resource_type, resource_id, details))
         db.commit()
         db.close()
-    except Exception:
-        # Don't fail the operation if audit logging fails
-        pass
+    except Exception as e:
+        # Log the failure but don't fail the operation
+        import sys
+        print(f"AUDIT LOG FAILURE: {username} {action} {resource_type}/{resource_id} - Error: {e}", file=sys.stderr)
 
 # ── Auth ──
 class LoginReq(BaseModel):
@@ -477,7 +493,7 @@ def get_my_salary_config(user=Depends(get_user)):
 
     # 获取员工可能工作的仓库列表
     wh_list = [emp["primary_wh"]] if emp.get("primary_wh") else []
-    if emp.get("dispatch_whs") and emp["dispatch_whs"]:
+    if emp.get("dispatch_whs"):
         dispatch_list = [wh.strip() for wh in emp["dispatch_whs"].split(",") if wh.strip()]
         wh_list.extend(dispatch_list)
     wh_list = list(set(filter(None, wh_list)))
@@ -640,15 +656,23 @@ def get_payroll_summary(month: Optional[str] = None, user=Depends(get_user)):
 
 @app.post("/api/timesheet/batch-approve")
 async def batch_approve(request: Request, user=Depends(get_user)):
-    body = await request.json(); db = database.get_db()
-    for tid in body.get("ids", []):
-        if body.get("type") == "wh":
-            db.execute("UPDATE timesheet SET wh_status='已仓库审批',wh_approver=?,wh_approve_time=? WHERE id=?",
-                       (user.get("display_name",""), datetime.now().isoformat(), tid))
-        else:
-            db.execute("UPDATE timesheet SET wh_status='已入账',fin_approver=?,fin_approve_time=? WHERE id=?",
-                       (user.get("display_name",""), datetime.now().isoformat(), tid))
-    db.commit(); db.close(); return {"ok": True}
+    body = await request.json()
+    db = database.get_db()
+    try:
+        for tid in body.get("ids", []):
+            if body.get("type") == "wh":
+                db.execute("UPDATE timesheet SET wh_status='已仓库审批',wh_approver=?,wh_approve_time=? WHERE id=?",
+                           (user.get("display_name",""), datetime.now().isoformat(), tid))
+            else:
+                db.execute("UPDATE timesheet SET wh_status='已入账',fin_approver=?,fin_approve_time=? WHERE id=?",
+                           (user.get("display_name",""), datetime.now().isoformat(), tid))
+        db.commit()
+        return {"ok": True}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"批量审批失败: {str(e)}")
+    finally:
+        db.close()
 
 # ── Containers ──
 @app.get("/api/containers")
@@ -667,9 +691,9 @@ async def create_container(request: Request, user=Depends(get_user)):
             mins = (eh*60+em)-(sh*60+sm)
             if mins < 0: mins += 1440
             data["duration_minutes"] = mins
-        except (ValueError, AttributeError):
-            # Invalid time format, skip duration calculation
-            pass
+        except (ValueError, AttributeError) as e:
+            # Invalid time format - raise error for user feedback
+            raise HTTPException(400, f"无效的时间格式: {data.get('start_time')} - {data.get('end_time')}")
 
     # 根据仓库获取装卸柜薪资
     wh = data.get("warehouse_code")
