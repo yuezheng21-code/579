@@ -1871,9 +1871,12 @@ const OrgChartPage=({t,lang})=>{
 // ══════ Safety Incidents (安全事件与投诉) ══════
 const SafetyPage=({t,lang})=>{
   const[incidents,setIncidents]=useState([]);const[showEdit,setShowEdit]=useState(null);
+  const[whs,setWhs]=useState([]);const[filterWh,setFilterWh]=useState('');
   const load=()=>API.get('/api/safety-incidents').then(setIncidents);
-  useEffect(load,[]);
+  useEffect(()=>{load();API.get('/api/warehouses').then(setWhs);},[]);
   const isDE=lang==='de';
+  const whMap=Object.fromEntries(whs.map(w=>[w.code,w.name]));
+  const filtered=filterWh?incidents.filter(i=>i.warehouse_code===filterWh):incidents;
   const save=async()=>{
     if(showEdit._isNew){await API.post('/api/safety-incidents',showEdit);}
     else{await API.put(`/api/safety-incidents/${showEdit.id}`,showEdit);}
@@ -1881,13 +1884,17 @@ const SafetyPage=({t,lang})=>{
   };
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
-      React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,incident_type:'安全事件',severity:'一般',status:'待处理',incident_date:new Date().toISOString().slice(0,10)})},
+      React.createElement('select',{value:filterWh,onChange:e=>setFilterWh(e.target.value),
+        style:{padding:'7px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)'}},
+        React.createElement('option',{value:''},isDE?'Alle Lager':'全部仓库'),
+        whs.map(w=>React.createElement('option',{key:w.code,value:w.code},`${w.code} - ${w.name}`))),
+      React.createElement('button',{className:'btn btn-pri',onClick:()=>setShowEdit({_isNew:true,incident_type:'安全事件',severity:'一般',status:'待处理',incident_date:new Date().toISOString().slice(0,10),warehouse_code:filterWh||''})},
         '+ '+(isDE?'Neuer Vorfall':'新增事件'))),
     React.createElement('div',{className:'stats'},
-      [{n:incidents.length,l:isDE?'Gesamt':'总事件',c:'var(--pri)'},
-       {n:incidents.filter(i=>i.status==='待处理').length,l:isDE?'Offen':'待处理',c:'var(--yellow)'},
-       {n:incidents.filter(i=>i.status==='已解决').length,l:isDE?'Gelöst':'已解决',c:'var(--green)'},
-       {n:incidents.filter(i=>i.severity==='严重').length,l:isDE?'Schwer':'严重',c:'var(--red)'}
+      [{n:filtered.length,l:isDE?'Gesamt':'总事件',c:'var(--pri)'},
+       {n:filtered.filter(i=>i.status==='待处理').length,l:isDE?'Offen':'待处理',c:'var(--yellow)'},
+       {n:filtered.filter(i=>i.status==='已解决').length,l:isDE?'Gelöst':'已解决',c:'var(--green)'},
+       {n:filtered.filter(i=>i.severity==='严重').length,l:isDE?'Schwer':'严重',c:'var(--red)'}
       ].map((s,i)=>React.createElement('div',{key:i,className:'stat'},
         React.createElement('div',{className:'num',style:{color:s.c}},s.n),
         React.createElement('div',{className:'label'},s.l)))),
@@ -1896,11 +1903,11 @@ const SafetyPage=({t,lang})=>{
         React.createElement('thead',null,React.createElement('tr',null,
           [isDE?'ID':'编号',isDE?'Typ':'类型',isDE?'Schwere':'严重度',isDE?'Lager':'仓库',
            isDE?'Datum':'日期',isDE?'Beschreibung':'描述',isDE?'Status':'状态',isDE?'Aktion':'操作'].map(h=>React.createElement('th',{key:h},h)))),
-        React.createElement('tbody',null,incidents.map(r=>React.createElement('tr',{key:r.id},
+        React.createElement('tbody',null,filtered.map(r=>React.createElement('tr',{key:r.id},
           React.createElement('td',null,r.id),
           React.createElement('td',null,React.createElement(SBadge,{s:r.incident_type})),
           React.createElement('td',null,React.createElement('span',{style:{color:r.severity==='严重'?'var(--red)':r.severity==='重要'?'var(--orange)':'var(--text2)',fontWeight:600}},r.severity)),
-          React.createElement('td',null,r.warehouse_code),
+          React.createElement('td',null,r.warehouse_code?(r.warehouse_code+' '+(whMap[r.warehouse_code]||'')):''),
           React.createElement('td',null,r.incident_date),
           React.createElement('td',{style:{maxWidth:200,overflow:'hidden',textOverflow:'ellipsis'}},r.description),
           React.createElement('td',null,React.createElement(SBadge,{s:r.status})),
@@ -1916,7 +1923,9 @@ const SafetyPage=({t,lang})=>{
             React.createElement('select',{value:showEdit.severity||'一般',onChange:e=>setShowEdit({...showEdit,severity:e.target.value})},
               ['一般','重要','严重'].map(s=>React.createElement('option',{key:s,value:s},s)))),
           React.createElement('div',{className:'form-field'},React.createElement('label',null,isDE?'Lager':'仓库'),
-            React.createElement('input',{value:showEdit.warehouse_code||'',onChange:e=>setShowEdit({...showEdit,warehouse_code:e.target.value})}))),
+            React.createElement('select',{value:showEdit.warehouse_code||'',onChange:e=>setShowEdit({...showEdit,warehouse_code:e.target.value})},
+              React.createElement('option',{value:''},isDE?'Bitte wählen':'请选择仓库'),
+              whs.map(w=>React.createElement('option',{key:w.code,value:w.code},`${w.code} - ${w.name}`))))),
         React.createElement('div',{className:'form-row'},
           React.createElement('div',{className:'form-field'},React.createElement('label',null,isDE?'Datum':'事件日期'),
             React.createElement('input',{type:'date',value:showEdit.incident_date||'',onChange:e=>setShowEdit({...showEdit,incident_date:e.target.value})})),
