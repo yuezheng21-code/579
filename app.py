@@ -495,10 +495,12 @@ def get_roster(
     db = database.get_db()
     try:
         rows = db.execute(f"""
-            SELECT e.*, s.name as supplier_name, w.name as warehouse_name, w.service_type
+            SELECT e.*, s.name as supplier_name, w.name as warehouse_name, w.service_type,
+                g.title_zh as grade_title
             FROM employees e
             LEFT JOIN suppliers s ON s.id = e.supplier_id
             LEFT JOIN warehouses w ON w.code = e.primary_wh
+            LEFT JOIN grade_levels g ON g.code = e.grade
             WHERE {where}
             ORDER BY e.id ASC
         """, tuple(params)).fetchall()
