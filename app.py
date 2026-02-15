@@ -1,5 +1,5 @@
 """渊博+579 HR V6 — FastAPI Backend (Enhanced with Account Management & Warehouse Salary)"""
-import os, json, uuid, shutil, secrets, string, traceback, threading, logging, sys, copy
+import os, json, uuid, shutil, secrets, string, traceback, threading, logging, sys, copy, time, hashlib, hmac, base64
 from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
@@ -22,7 +22,6 @@ DB_INIT_MAX_RETRIES = int(os.environ.get("DB_INIT_MAX_RETRIES", 5))
 DB_INIT_RETRY_DELAY = int(os.environ.get("DB_INIT_RETRY_DELAY", 3))
 
 def _init_database():
-    import time as _time
     global _db_ready
     for attempt in range(1, DB_INIT_MAX_RETRIES + 1):
         try:
@@ -35,7 +34,7 @@ def _init_database():
         except Exception as e:
             print(f"⚠️ Database initialization error (attempt {attempt}/{DB_INIT_MAX_RETRIES}): {e}")
             if attempt < DB_INIT_MAX_RETRIES:
-                _time.sleep(DB_INIT_RETRY_DELAY)
+                time.sleep(DB_INIT_RETRY_DELAY)
             else:
                 traceback.print_exc()
 
@@ -55,8 +54,6 @@ app.add_middleware(
     allow_methods=["*"], 
     allow_headers=["*"]
 )
-
-import hashlib, time, hmac, base64
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
