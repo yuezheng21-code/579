@@ -825,9 +825,9 @@ def seed_data():
         "mgr": {"employees": "tax_no,tax_id,ssn,iban,health_insurance"},
         "hr": {"employees": "iban"},
         "fin": {"employees": "birth_date,id_number,emergency_contact,emergency_phone,work_permit_no"},
-        "wh": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,emergency_contact,emergency_phone,work_permit_no"},
-        "sup": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,emergency_contact,emergency_phone,work_permit_no,address"},
-        "worker": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,emergency_contact,emergency_phone,work_permit_no,address,phone,email"},
+        "wh": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
+        "sup": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
+        "worker": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,phone,email"},
     }
     for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
         scope = role_data_scope.get(role, "all")

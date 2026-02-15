@@ -2084,7 +2084,7 @@ async def test_wh_hidden_fields_on_employees(wh_headers):
     assert len(emps) > 0
     emp = emps[0]
     # WH should not see these sensitive fields
-    for field in ["tax_no", "tax_id", "ssn", "iban", "base_salary", "hourly_rate"]:
+    for field in ["tax_no", "tax_id", "ssn", "iban", "base_salary", "hourly_rate", "address"]:
         assert field not in emp, f"WH role should NOT see field: {field}"
     # WH should still see basic work fields
     assert "name" in emp
@@ -2259,7 +2259,10 @@ async def test_editable_fields_enforcement(auth_headers):
                          json={"status": "在职", "position": "装卸", "base_salary": 99999})
     assert r.status_code == 200
     # Verify base_salary was NOT changed (enforced by editable_fields)
+    # and that allowed fields (status, position) were applied
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.get("/api/employees/YB-001", headers=auth_headers)
     emp = r.json()
     assert emp["base_salary"] != 99999
+    assert emp["status"] == "在职"
+    assert emp["position"] == "装卸"
