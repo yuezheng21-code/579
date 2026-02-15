@@ -499,6 +499,25 @@ async def test_get_roster(auth_headers):
     assert "contract_type" in emp
     assert "dispatch_type" in emp
     assert "emergency_contact" in emp
+    # Check that grade_title, warehouse_name, supplier_name are linked
+    assert "grade_title" in emp
+    assert "warehouse_name" in emp
+    assert "supplier_name" in emp
+
+
+@pytest.mark.asyncio
+async def test_roster_includes_grade_title(auth_headers):
+    """Test roster returns grade_title from grade_levels JOIN."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/roster", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    # Find YB-001 which has grade=P2
+    emp = next((e for e in data if e["id"] == "YB-001"), None)
+    assert emp is not None
+    assert emp["grade_title"] is not None
+    assert emp["warehouse_name"] is not None
 
 
 @pytest.mark.asyncio
