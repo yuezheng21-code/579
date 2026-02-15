@@ -114,7 +114,11 @@ ALLOWED_TABLES = {
     "employees", "users", "timesheet", "leave_requests", "expense_claims",
     "performance_reviews", "warehouses", "suppliers", "business_lines",
     "employee_grades", "warehouse_salary_config", "leave_balances",
-    "dispatch_needs", "container_tasks", "audit_logs"
+    "dispatch_needs", "container_tasks", "audit_logs", "container_records",
+    "grade_levels", "grade_evaluations", "promotion_applications",
+    "bonus_applications", "quotation_templates", "quotation_records",
+    "employee_files", "leave_types", "talent_pool", "recruit_progress",
+    "schedules", "messages", "permission_overrides"
 }
 
 # Table-specific allowed order columns for validation
@@ -129,11 +133,25 @@ TABLE_ORDER_COLUMNS = {
     "suppliers": ["id", "name"],
     "business_lines": ["id", "name"],
     "employee_grades": ["id", "grade"],
-    "warehouse_salary_config": ["id", "created_at", "updated_at", "warehouse_code", "grade"],
+    "warehouse_salary_config": ["id", "created_at", "updated_at", "warehouse_code", "grade", "position_type"],
     "leave_balances": ["id", "employee_id"],
     "dispatch_needs": ["id", "created_at"],
     "container_tasks": ["id", "created_at"],
     "audit_logs": ["id", "timestamp"],
+    "container_records": ["id", "created_at"],
+    "grade_levels": ["id", "series", "level"],
+    "grade_evaluations": ["id", "created_at"],
+    "promotion_applications": ["id", "created_at"],
+    "bonus_applications": ["id", "created_at"],
+    "quotation_templates": ["id", "created_at"],
+    "quotation_records": ["id", "created_at"],
+    "employee_files": ["id", "created_at", "employee_id"],
+    "leave_types": ["id", "code"],
+    "talent_pool": ["id", "created_at"],
+    "recruit_progress": ["id", "created_at"],
+    "schedules": ["id", "created_at", "work_date"],
+    "messages": ["id", "created_at", "timestamp"],
+    "permission_overrides": ["id", "role", "module"],
 }
 
 def _validate_table_name(table: str):
@@ -144,17 +162,22 @@ def _validate_table_name(table: str):
 
 def _validate_order_clause(order: str, table: str):
     """Validate ORDER BY clause to prevent SQL injection"""
-    # Allow simple column names with optional DESC/ASC
-    pattern = r'^(\w+)(\s+(DESC|ASC))?$'
-    match = re.match(pattern, order, re.IGNORECASE)
-    if not match:
-        raise HTTPException(400, f"Invalid order clause: {order}")
+    # Allow multiple columns separated by commas, each with optional DESC/ASC
+    # Split by comma and validate each part
+    parts = [part.strip() for part in order.split(',')]
     
-    column = match.group(1)
-    # Check if column is allowed for this specific table
-    allowed_cols = TABLE_ORDER_COLUMNS.get(table, ["id"])
-    if column not in allowed_cols:
-        raise HTTPException(400, f"Invalid order column '{column}' for table '{table}'")
+    for part in parts:
+        # Allow simple column names with optional DESC/ASC
+        pattern = r'^(\w+)(\s+(DESC|ASC))?$'
+        match = re.match(pattern, part, re.IGNORECASE)
+        if not match:
+            raise HTTPException(400, f"Invalid order clause part: {part}")
+        
+        column = match.group(1)
+        # Check if column is allowed for this specific table
+        allowed_cols = TABLE_ORDER_COLUMNS.get(table, ["id"])
+        if column not in allowed_cols:
+            raise HTTPException(400, f"Invalid order column '{column}' for table '{table}'")
     
     return order
 
@@ -240,6 +263,11 @@ class TimesheetCreateReq(BaseModel):
     hours: float = 0
     grade: Optional[str] = None
     position: Optional[str] = "库内"
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint for Railway monitoring"""
+    return {"status": "ok"}
 
 @app.post("/api/login")
 def login(req: LoginReq):
