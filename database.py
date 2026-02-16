@@ -708,6 +708,21 @@ def init_db():
         FOREIGN KEY (need_id) REFERENCES dispatch_needs(id) ON DELETE SET NULL,
         FOREIGN KEY (candidate_id) REFERENCES talent_pool(id) ON DELETE SET NULL,
         FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL)""",
+    """CREATE TABLE IF NOT EXISTS cloud_sync_configs (
+        id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL DEFAULT 'wps',
+        name TEXT NOT NULL,
+        app_id TEXT,
+        app_secret TEXT,
+        table_id TEXT,
+        doc_id TEXT,
+        sync_table TEXT NOT NULL,
+        sync_direction TEXT DEFAULT 'push',
+        last_sync_at TEXT,
+        status TEXT DEFAULT '已启用',
+        created_by TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')))""",
     ]
     for sql in tables:
         c.execute(_adapt_sql_for_db(sql))
@@ -757,6 +772,7 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_schedules_work_date ON schedules(work_date)",
         "CREATE INDEX IF NOT EXISTS idx_timesheet_wh_status ON timesheet(wh_status)",
         "CREATE INDEX IF NOT EXISTS idx_payslips_emp_month ON payslips(employee_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_cloud_sync_provider ON cloud_sync_configs(provider)",
     ]
     for idx_sql in indexes:
         try:
