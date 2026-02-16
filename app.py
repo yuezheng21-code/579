@@ -161,7 +161,7 @@ ALLOWED_TABLES = {
     "employee_files", "leave_types", "talent_pool", "recruit_progress",
     "schedules", "messages", "permission_overrides", "enterprise_documents",
     "safety_incidents", "id_naming_rules", "payslips", "payroll_confirmations",
-    "dispatch_transfers", "regions", "job_positions"
+    "dispatch_transfers", "regions", "job_positions", "cloud_sync_configs"
 }
 
 # Table-specific allowed order columns for validation
@@ -203,6 +203,7 @@ TABLE_ORDER_COLUMNS = {
     "dispatch_transfers": ["id", "created_at", "dispatch_date"],
     "regions": ["code", "name", "created_at", "updated_at"],
     "job_positions": ["code", "level", "category", "created_at", "updated_at"],
+    "cloud_sync_configs": ["id", "created_at", "updated_at", "provider", "name"],
 }
 
 def _validate_table_name(table: str):
@@ -3503,6 +3504,116 @@ async def update_dispatch_transfer(tid: str, request: Request, user=Depends(get_
         raise HTTPException(500, f"更新调仓申请失败: {str(e)}")
     audit_log(user.get("username", ""), "update", "dispatch_transfers", tid, json.dumps(data, ensure_ascii=False))
     return {"ok": True}
+
+# ── Cloud Sync Configs (WPS 多维表格 / 腾讯文档) ──
+
+@app.get("/api/cloud-sync-configs")
+def list_cloud_sync_configs(user=Depends(get_user)):
+    if user.get("role") not in ("admin", "hr", "mgr", "fin"):
+        raise HTTPException(403, "无权限查看云文档配置")
+    rows = q("cloud_sync_configs", order="created_at DESC")
+    # Mask app_secret for non-admin users
+    for r in rows:
+        if r.get("app_secret") and user.get("role") != "admin":
+            r["app_secret"] = "****"
+    return rows
+
+@app.post("/api/cloud-sync-configs")
+async def create_cloud_sync_config(request: Request, user=Depends(get_user)):
+    if user.get("role") not in ("admin", "hr", "mgr"):
+        raise HTTPException(403, "无权限创建云文档配置")
+    body = await request.json()
+    cid = f"CSC-{uuid.uuid4().hex[:8].upper()}"
+    provider = body.get("provider", "wps")
+    if provider not in ("wps", "tencent"):
+        raise HTTPException(400, "provider 必须为 wps 或 tencent")
+    sync_table = body.get("sync_table", "")
+    if not sync_table:
+        raise HTTPException(400, "sync_table 不能为空")
+    data = {
+        "id": cid,
+        "provider": provider,
+        "name": body.get("name", ""),
+        "app_id": body.get("app_id", ""),
+        "app_secret": body.get("app_secret", ""),
+        "table_id": body.get("table_id", ""),
+        "doc_id": body.get("doc_id", ""),
+        "sync_table": sync_table,
+        "sync_direction": body.get("sync_direction", "push"),
+        "status": body.get("status", "已启用"),
+        "created_by": user.get("username", ""),
+    }
+    insert("cloud_sync_configs", data)
+    audit_log(user.get("username", ""), "create", "cloud_sync_configs", cid, json.dumps(data, ensure_ascii=False))
+    return {**data, "ok": True}
+
+@app.put("/api/cloud-sync-configs/{config_id}")
+async def update_cloud_sync_config(config_id: str, request: Request, user=Depends(get_user)):
+    if user.get("role") not in ("admin", "hr", "mgr"):
+        raise HTTPException(403, "无权限修改云文档配置")
+    body = await request.json()
+    allowed = {"name", "app_id", "app_secret", "table_id", "doc_id",
+               "sync_table", "sync_direction", "status"}
+    data = {k: v for k, v in body.items() if k in allowed}
+    if "provider" in body and body["provider"] not in ("wps", "tencent"):
+        raise HTTPException(400, "provider 必须为 wps 或 tencent")
+    if "provider" in body:
+        data["provider"] = body["provider"]
+    data["updated_at"] = datetime.now().isoformat()
+    update("cloud_sync_configs", "id", config_id, data)
+    audit_log(user.get("username", ""), "update", "cloud_sync_configs", config_id, json.dumps(data, ensure_ascii=False))
+    return {"ok": True, "id": config_id}
+
+@app.delete("/api/cloud-sync-configs/{config_id}")
+def delete_cloud_sync_config(config_id: str, user=Depends(get_user)):
+    if user.get("role") not in ("admin", "hr", "mgr"):
+        raise HTTPException(403, "无权限删除云文档配置")
+    db = database.get_db()
+    try:
+        db.execute("DELETE FROM cloud_sync_configs WHERE id=?", (config_id,))
+        db.commit()
+    finally:
+        db.close()
+    audit_log(user.get("username", ""), "delete", "cloud_sync_configs", config_id, "")
+    return {"ok": True}
+
+@app.post("/api/cloud-sync-configs/{config_id}/sync")
+def trigger_cloud_sync(config_id: str, user=Depends(get_user)):
+    """Trigger a sync operation for the given cloud sync config.
+    This generates the data payload and returns it for client-side push to WPS/Tencent."""
+    if user.get("role") not in ("admin", "hr", "mgr", "fin"):
+        raise HTTPException(403, "无权限执行同步")
+    rows = q("cloud_sync_configs", where="id=?", params=(config_id,))
+    if not rows:
+        raise HTTPException(404, "配置不存在")
+    config = rows[0]
+    sync_table = config.get("sync_table", "")
+    if sync_table not in TABLE_EXPORT_FIELDS:
+        raise HTTPException(400, f"不支持同步的表: {sync_table}")
+
+    fields = TABLE_EXPORT_FIELDS[sync_table]
+    labels = TABLE_FIELD_LABELS.get(sync_table, {})
+    data_rows = q(sync_table)
+    export_data = []
+    for row in data_rows:
+        export_data.append({labels.get(f, f): row.get(f) for f in fields if f in row})
+
+    # Update last_sync_at
+    update("cloud_sync_configs", "id", config_id, {
+        "last_sync_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+    })
+    audit_log(user.get("username", ""), "sync", "cloud_sync_configs", config_id,
+              f"synced {len(export_data)} rows from {sync_table}")
+
+    return {
+        "ok": True,
+        "config": config,
+        "table": sync_table,
+        "fields": [labels.get(f, f) for f in fields],
+        "count": len(export_data),
+        "data": export_data,
+    }
 
 @app.delete("/api/{table}/{record_id}")
 async def delete_record(table: str, record_id: str, user=Depends(get_user)):

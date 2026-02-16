@@ -505,6 +505,23 @@ CREATE TABLE IF NOT EXISTS recruit_progress (
     FOREIGN KEY (candidate_id) REFERENCES talent_pool(id) ON DELETE SET NULL,
     FOREIGN KEY (supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL);
 
+-- ── Cloud Sync Configs - 云文档集成配置 ──
+CREATE TABLE IF NOT EXISTS cloud_sync_configs (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'wps',
+    name TEXT NOT NULL,
+    app_id TEXT,
+    app_secret TEXT,
+    table_id TEXT,
+    doc_id TEXT,
+    sync_table TEXT NOT NULL,
+    sync_direction TEXT DEFAULT 'push',
+    last_sync_at TEXT,
+    status TEXT DEFAULT '已启用',
+    created_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')));
+
 -- ============================================================================
 -- Indexes for Better Performance and Data Integrity
 -- ============================================================================
@@ -535,3 +552,4 @@ CREATE INDEX IF NOT EXISTS idx_expense_claims_employee ON expense_claims(employe
 CREATE INDEX IF NOT EXISTS idx_employee_files_employee ON employee_files(employee_id);
 CREATE INDEX IF NOT EXISTS idx_dispatch_transfers_employee ON dispatch_transfers(employee_id);
 CREATE INDEX IF NOT EXISTS idx_enterprise_docs_warehouse ON enterprise_documents(warehouse_code);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_provider ON cloud_sync_configs(provider);

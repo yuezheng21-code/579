@@ -3948,3 +3948,125 @@ async def test_warehouse_cascade_no_linked_users(auth_headers):
         r2 = await ac.put("/api/warehouses/TEST-WH", headers=auth_headers,
                           json={"name": "测试仓库改名", "biz_line": "测试业务"})
     assert r2.status_code == 200
+
+
+# ════════ Cloud Sync Configs Tests ════════
+
+@pytest.mark.asyncio
+async def test_cloud_sync_create(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/cloud-sync-configs", headers=auth_headers,
+                          json={"provider": "wps", "name": "Test WPS Sync",
+                                "app_id": "app123", "app_secret": "secret123",
+                                "table_id": "tbl_1", "sync_table": "employees",
+                                "sync_direction": "push"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert data["provider"] == "wps"
+    assert data["name"] == "Test WPS Sync"
+    assert data["sync_table"] == "employees"
+    assert data["id"].startswith("CSC-")
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_create_tencent(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/cloud-sync-configs", headers=auth_headers,
+                          json={"provider": "tencent", "name": "Tencent Doc Sync",
+                                "app_id": "tx_app", "doc_id": "doc_1",
+                                "sync_table": "timesheet"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["provider"] == "tencent"
+    assert data["sync_table"] == "timesheet"
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_create_invalid_provider(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/cloud-sync-configs", headers=auth_headers,
+                          json={"provider": "invalid", "name": "Bad",
+                                "sync_table": "employees"})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_create_missing_table(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/cloud-sync-configs", headers=auth_headers,
+                          json={"provider": "wps", "name": "No Table"})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_list(auth_headers):
+    transport = ASGITransport(app=app)
+    # Create one first
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        await ac.post("/api/cloud-sync-configs", headers=auth_headers,
+                      json={"provider": "wps", "name": "List Test",
+                            "sync_table": "employees"})
+        r = await ac.get("/api/cloud-sync-configs", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    assert len(data) >= 1
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_update(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        cr = await ac.post("/api/cloud-sync-configs", headers=auth_headers,
+                           json={"provider": "wps", "name": "Update Test",
+                                 "sync_table": "employees"})
+        cid = cr.json()["id"]
+        r = await ac.put(f"/api/cloud-sync-configs/{cid}", headers=auth_headers,
+                         json={"name": "Updated Name", "status": "已禁用"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_delete(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        cr = await ac.post("/api/cloud-sync-configs", headers=auth_headers,
+                           json={"provider": "wps", "name": "Delete Test",
+                                 "sync_table": "employees"})
+        cid = cr.json()["id"]
+        r = await ac.delete(f"/api/cloud-sync-configs/{cid}", headers=auth_headers)
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_trigger(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        cr = await ac.post("/api/cloud-sync-configs", headers=auth_headers,
+                           json={"provider": "wps", "name": "Sync Test",
+                                 "sync_table": "employees"})
+        cid = cr.json()["id"]
+        r = await ac.post(f"/api/cloud-sync-configs/{cid}/sync",
+                          headers=auth_headers, json={})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert "data" in data
+    assert "fields" in data
+    assert isinstance(data["count"], int)
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_trigger_not_found(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/cloud-sync-configs/NONEXIST/sync",
+                          headers=auth_headers, json={})
+    assert r.status_code == 404

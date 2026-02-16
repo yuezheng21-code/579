@@ -239,7 +239,7 @@ const T = {
     name:'姓名',grade:'职级',status:'状态',date:'日期',amount:'金额',total:'合计',
     pending:'待审批',approved:'已批准',rejected:'已拒绝',all:'全部',
     mypage:'我的页面',accounts:'账号管理',whsalary:'仓库薪资',warehouse:'仓库管理',docs:'企业文献',
-    orgchart:'组织架构',safety:'安全管理',register:'员工申报',compliance:'合规检查'},
+    orgchart:'组织架构',safety:'安全管理',register:'员工申报',compliance:'合规检查',cloudsync:'云文档集成'},
   en:{dashboard:'Dashboard',employees:'Employees',suppliers:'Suppliers',grades:'Grade System',performance:'Performance',
     quotation:'Quotation',files:'Employee Files',leave:'Leave Mgmt',expense:'Expense',
     timesheet:'Timesheet',container:'Container',settlement:'Settlement',schedule:'Schedule',
@@ -249,7 +249,7 @@ const T = {
     name:'Name',grade:'Grade',status:'Status',date:'Date',amount:'Amount',total:'Total',
     pending:'Pending',approved:'Approved',rejected:'Rejected',all:'All',
     mypage:'My Page',accounts:'Accounts',whsalary:'WH Salary',warehouse:'Warehouse Mgmt',docs:'Documents',
-    orgchart:'Org Chart',safety:'Safety',register:'Registration',compliance:'Compliance'},
+    orgchart:'Org Chart',safety:'Safety',register:'Registration',compliance:'Compliance',cloudsync:'Cloud Docs'},
   de:{dashboard:'Dashboard',employees:'Mitarbeiter',suppliers:'Lieferanten',grades:'Stufensystem',performance:'Leistung',
     quotation:'Angebot',files:'Personalakte',leave:'Urlaub',expense:'Spesen',
     timesheet:'Zeiterfassung',container:'Container',settlement:'Abrechnung',schedule:'Dienstplan',
@@ -259,7 +259,7 @@ const T = {
     name:'Name',grade:'Stufe',status:'Status',date:'Datum',amount:'Betrag',total:'Gesamt',
     pending:'Ausstehend',approved:'Genehmigt',rejected:'Abgelehnt',all:'Alle',
     mypage:'Meine Seite',accounts:'Konten',whsalary:'Lager Gehalt',warehouse:'Lagerverwaltung',docs:'Dokumente',
-    orgchart:'Organigramm',safety:'Sicherheit',register:'Anmeldung',compliance:'Compliance'},
+    orgchart:'Organigramm',safety:'Sicherheit',register:'Anmeldung',compliance:'Compliance',cloudsync:'Cloud-Dokumente'},
   vi:{dashboard:'Bảng điều khiển',employees:'Nhân viên',suppliers:'Nhà cung cấp',grades:'Hệ cấp bậc',performance:'Hiệu suất',
     quotation:'Báo giá',files:'Hồ sơ nhân sự',leave:'Nghỉ phép',expense:'Chi phí',
     timesheet:'Chấm công',container:'Container',settlement:'Quyết toán',schedule:'Lịch làm việc',
@@ -269,7 +269,7 @@ const T = {
     name:'Tên',grade:'Cấp bậc',status:'Trạng thái',date:'Ngày',amount:'Số tiền',total:'Tổng',
     pending:'Chờ duyệt',approved:'Đã duyệt',rejected:'Từ chối',all:'Tất cả',
     mypage:'Trang của tôi',accounts:'Tài khoản',whsalary:'Lương kho',warehouse:'Quản lý kho',docs:'Tài liệu',
-    orgchart:'Sơ đồ',safety:'An toàn',register:'Đăng ký',compliance:'Tuân thủ'},
+    orgchart:'Sơ đồ',safety:'An toàn',register:'Đăng ký',compliance:'Tuân thủ',cloudsync:'Tài liệu đám mây'},
   ar:{dashboard:'لوحة التحكم',employees:'الموظفون',suppliers:'الموردون',grades:'نظام الدرجات',performance:'الأداء',
     quotation:'عروض الأسعار',files:'ملفات الموظفين',leave:'إدارة الإجازات',expense:'المصروفات',
     timesheet:'سجل الساعات',container:'الحاويات',settlement:'التسوية',schedule:'الجدول',
@@ -279,7 +279,7 @@ const T = {
     name:'الاسم',grade:'الدرجة',status:'الحالة',date:'التاريخ',amount:'المبلغ',total:'الإجمالي',
     pending:'قيد الانتظار',approved:'تم الاعتماد',rejected:'مرفوض',all:'الكل',
     mypage:'صفحتي',accounts:'الحسابات',whsalary:'راتب المستودع',warehouse:'إدارة المستودعات',docs:'المستندات',
-    orgchart:'الهيكل',safety:'السلامة',register:'التسجيل',compliance:'الامتثال'},
+    orgchart:'الهيكل',safety:'السلامة',register:'التسجيل',compliance:'الامتثال',cloudsync:'مستندات سحابية'},
   hu:{dashboard:'Vezérlőpult',employees:'Munkatársak',suppliers:'Beszállítók',grades:'Szint rendszer',performance:'Teljesítmény',
     quotation:'Árajánlat',files:'Személyi akták',leave:'Szabadság',expense:'Költségek',
     timesheet:'Munkaidő',container:'Konténer',settlement:'Elszámolás',schedule:'Beosztás',
@@ -289,7 +289,7 @@ const T = {
     name:'Név',grade:'Szint',status:'Állapot',date:'Dátum',amount:'Összeg',total:'Összesen',
     pending:'Függőben',approved:'Jóváhagyva',rejected:'Elutasítva',all:'Összes',
     mypage:'Saját oldal',accounts:'Fiókok',whsalary:'Raktárbér',warehouse:'Raktárkezelés',docs:'Dokumentumok',
-    orgchart:'Szervezet',safety:'Biztonság',register:'Regisztráció',compliance:'Megfelelőség'}
+    orgchart:'Szervezet',safety:'Biztonság',register:'Regisztráció',compliance:'Megfelelőség',cloudsync:'Felhő dokumentumok'}
 };
 const LANGS = [{c:'zh',n:'中文'},{c:'en',n:'English'},{c:'de',n:'Deutsch'},{c:'vi',n:'Tiếng Việt'},{c:'ar',n:'العربية'},{c:'hu',n:'Magyar'}];
 const LOCALE_MAP = {zh:'zh-CN',en:'en-US',de:'de-DE',vi:'vi-VN',ar:'ar-SA',hu:'hu-HU'};
@@ -1355,6 +1355,193 @@ const DocsPage=({t})=>{
           React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
 };
 
+// ══════ Cloud Sync (WPS 多维表格 / 腾讯文档) ══════
+const CloudSyncPage=({t,user})=>{
+  const[configs,setConfigs]=useState([]);
+  const[showEdit,setShowEdit]=useState(null);
+  const[syncing,setSyncing]=useState(null);
+  const[syncResult,setSyncResult]=useState(null);
+  const tables=['employees','suppliers','timesheet','warehouses','leave_requests','expense_claims',
+    'performance_reviews','container_records','schedules','dispatch_needs'];
+  const tableLabels={employees:'花名册',suppliers:'供应商',timesheet:'工时记录',warehouses:'仓库',
+    leave_requests:'假期申请',expense_claims:'报销',performance_reviews:'绩效',
+    container_records:'装卸柜',schedules:'排班',dispatch_needs:'派遣需求'};
+  const load=()=>API.get('/api/cloud-sync-configs').then(r=>setConfigs(r||[]));
+  useEffect(()=>{load()},[]);
+  const save=async()=>{
+    if(!showEdit.name||!showEdit.sync_table){showToast('请填写名称和同步表','error');return;}
+    let r;
+    if(showEdit.id&&!showEdit._isNew){
+      r=await API.put(`/api/cloud-sync-configs/${showEdit.id}`,showEdit);
+    }else{
+      const d={...showEdit};delete d._isNew;delete d.id;
+      r=await API.post('/api/cloud-sync-configs',d);
+    }
+    if(!r)return;
+    showToast('保存成功');setShowEdit(null);load();
+  };
+  const doDelete=async(id)=>{
+    if(!confirm('确定删除此配置？'))return;
+    await API.del(`/api/cloud-sync-configs/${id}`);
+    showToast('已删除');load();
+  };
+  const doSync=async(cfg)=>{
+    setSyncing(cfg.id);setSyncResult(null);
+    try{
+      const r=await API.post(`/api/cloud-sync-configs/${cfg.id}/sync`,{});
+      if(r&&r.ok){
+        setSyncResult(r);
+        showToast(`同步完成: ${r.count} 条数据已准备`);
+        load();
+      }
+    }catch(e){showToast('同步失败: '+e.message,'error');}
+    finally{setSyncing(null);}
+  };
+  const copyData=()=>{
+    if(!syncResult)return;
+    navigator.clipboard.writeText(JSON.stringify(syncResult.data,null,2))
+      .then(()=>showToast('数据已复制到剪贴板'))
+      .catch(()=>showToast('复制失败','error'));
+  };
+  const downloadData=()=>{
+    if(!syncResult)return;
+    const blob=new Blob([JSON.stringify(syncResult.data,null,2)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=`${syncResult.table}_sync.json`;a.click();
+  };
+  const providerInfo={
+    wps:{name:'WPS 多维表格',icon:'📊',color:'var(--green)',
+      desc:'通过 WPS 开放平台 API 同步数据到多维表格',
+      help:'需要在 WPS 开放平台 (open.wps.cn) 创建应用获取 App ID 和 App Secret，并提供目标多维表格的 Table ID'},
+    tencent:{name:'腾讯文档',icon:'📄',color:'var(--cyan)',
+      desc:'通过腾讯文档开放 API 同步数据到在线表格',
+      help:'需要在腾讯文档开放平台 (docs.qq.com/open) 创建应用获取 App ID 和 App Secret，并提供目标文档 ID'}
+  };
+  return React.createElement('div',{className:'fade'},
+    React.createElement('div',{style:{marginBottom:16}},
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},
+        React.createElement('div',null,
+          React.createElement('h3',{style:{margin:0,fontSize:16}},'☁️ 云文档集成'),
+          React.createElement('p',{style:{margin:'4px 0 0',fontSize:12,color:'var(--text2)'}},'连接 WPS 多维表格或腾讯文档，同步系统数据到云端表格')),
+        React.createElement('button',{className:'btn btn-pri',
+          onClick:()=>setShowEdit({_isNew:true,provider:'wps',name:'',app_id:'',app_secret:'',
+            table_id:'',doc_id:'',sync_table:'employees',sync_direction:'push',status:'已启用'})},'+ 新增连接')),
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:10,marginBottom:16}},
+        React.createElement('div',{className:'card',style:{textAlign:'center',padding:20,cursor:'pointer',border:'2px dashed var(--border)'},
+          onClick:()=>setShowEdit({_isNew:true,provider:'wps',name:'',app_id:'',app_secret:'',
+            table_id:'',doc_id:'',sync_table:'employees',sync_direction:'push',status:'已启用'})},
+          React.createElement('div',{style:{fontSize:32}},'📊'),
+          React.createElement('div',{style:{fontWeight:600,marginTop:4}},'WPS 多维表格'),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text2)',marginTop:4}},'连接 WPS 开放平台')),
+        React.createElement('div',{className:'card',style:{textAlign:'center',padding:20,cursor:'pointer',border:'2px dashed var(--border)'},
+          onClick:()=>setShowEdit({_isNew:true,provider:'tencent',name:'',app_id:'',app_secret:'',
+            table_id:'',doc_id:'',sync_table:'employees',sync_direction:'push',status:'已启用'})},
+          React.createElement('div',{style:{fontSize:32}},'📄'),
+          React.createElement('div',{style:{fontWeight:600,marginTop:4}},'腾讯文档'),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text2)',marginTop:4}},'连接腾讯文档开放平台')))),
+    configs.length===0?React.createElement('div',{className:'card',style:{textAlign:'center',padding:40,color:'var(--text3)'}},
+      React.createElement('div',{style:{fontSize:40,marginBottom:8}},'☁️'),
+      React.createElement('div',null,'暂无云文档连接配置'),
+      React.createElement('div',{style:{fontSize:12,marginTop:4}},'点击上方按钮添加 WPS 多维表格或腾讯文档连接')):
+    React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))',gap:12}},
+      configs.map(c=>{
+        const pi=providerInfo[c.provider]||providerInfo.wps;
+        return React.createElement('div',{key:c.id,className:'card'},
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+            React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
+              React.createElement('span',{style:{fontSize:20}},pi.icon),
+              React.createElement('div',null,
+                React.createElement('div',{style:{fontWeight:700,fontSize:14}},c.name||'未命名'),
+                React.createElement('div',{style:{fontSize:11,color:'var(--text2)'}},pi.name))),
+            React.createElement('span',{className:'badge-s',
+              style:{background:c.status==='已启用'?'rgba(34,197,94,.15)':'rgba(239,68,68,.15)',
+                color:c.status==='已启用'?'var(--green)':'var(--red)'}},c.status)),
+          React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,fontSize:12,marginBottom:8}},
+            React.createElement('div',null,React.createElement('span',{style:{color:'var(--text3)'}},'同步表: '),
+              React.createElement('span',null,tableLabels[c.sync_table]||c.sync_table)),
+            React.createElement('div',null,React.createElement('span',{style:{color:'var(--text3)'}},'方向: '),
+              React.createElement('span',null,c.sync_direction==='push'?'推送↑':'拉取↓')),
+            React.createElement('div',null,React.createElement('span',{style:{color:'var(--text3)'}},'App ID: '),
+              React.createElement('span',null,c.app_id?c.app_id.slice(0,8)+'...':'未设置')),
+            React.createElement('div',null,React.createElement('span',{style:{color:'var(--text3)'}},'上次同步: '),
+              React.createElement('span',null,c.last_sync_at?c.last_sync_at.slice(0,16).replace('T',' '):'从未'))),
+          React.createElement('div',{style:{display:'flex',gap:6,justifyContent:'flex-end'}},
+            React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:()=>setShowEdit(c)},'✏️ 编辑'),
+            React.createElement('button',{className:'btn btn-ghost btn-sm',style:{color:'var(--red)'},onClick:()=>doDelete(c.id)},'🗑️'),
+            React.createElement('button',{className:'btn btn-pri btn-sm',disabled:syncing===c.id,
+              onClick:()=>doSync(c)},syncing===c.id?'⏳ 同步中...':'🔄 同步数据')));})),
+    syncResult&&React.createElement('div',{className:'card',style:{marginTop:16}},
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+        React.createElement('h4',{style:{margin:0}},'📋 同步数据预览 ('+syncResult.count+' 条)'),
+        React.createElement('div',{style:{display:'flex',gap:6}},
+          React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:copyData},'📋 复制JSON'),
+          React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:downloadData},'💾 下载'),
+          React.createElement('button',{className:'btn btn-ghost btn-sm',onClick:()=>setSyncResult(null)},'✕ 关闭'))),
+      React.createElement('div',{style:{fontSize:12,color:'var(--text2)',marginBottom:8}},
+        '数据已准备好，可复制 JSON 后粘贴到 WPS 多维表格或腾讯文档，或通过 API 自动推送'),
+      React.createElement('div',{className:'table-wrap',style:{maxHeight:300,overflow:'auto'}},
+        syncResult.data.length>0?React.createElement('table',null,
+          React.createElement('thead',null,React.createElement('tr',null,
+            syncResult.fields.map(f=>React.createElement('th',{key:f},f)))),
+          React.createElement('tbody',null,
+            syncResult.data.slice(0,50).map((row,i)=>React.createElement('tr',{key:i},
+              syncResult.fields.map(f=>React.createElement('td',{key:f},String(row[f]!=null?row[f]:''))))))):
+        React.createElement('div',{style:{textAlign:'center',padding:20,color:'var(--text3)'}},'无数据'))),
+    showEdit&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowEdit(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,showEdit._isNew?'新增云文档连接':'编辑云文档连接'),
+        (()=>{const pi=providerInfo[showEdit.provider]||providerInfo.wps;
+          return React.createElement('div',{className:'card',
+            style:{background:'var(--bg)',marginBottom:12,padding:12}},
+            React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
+              React.createElement('span',{style:{fontSize:20}},pi.icon),
+              React.createElement('span',{style:{fontWeight:600,color:pi.color}},pi.name)),
+            React.createElement('div',{style:{fontSize:12,color:'var(--text2)',marginTop:4}},pi.desc),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text3)',marginTop:4}},pi.help));})(),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'连接名称'),
+            React.createElement('input',{value:showEdit.name||'',placeholder:'如: 员工花名册同步',
+              onChange:e=>setShowEdit({...showEdit,name:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'平台'),
+            React.createElement('select',{value:showEdit.provider||'wps',
+              onChange:e=>setShowEdit({...showEdit,provider:e.target.value})},
+              React.createElement('option',{value:'wps'},'WPS 多维表格'),
+              React.createElement('option',{value:'tencent'},'腾讯文档')))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'App ID'),
+            React.createElement('input',{value:showEdit.app_id||'',placeholder:'从开放平台获取',
+              onChange:e=>setShowEdit({...showEdit,app_id:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'App Secret'),
+            React.createElement('input',{type:'password',value:showEdit.app_secret||'',placeholder:'从开放平台获取',
+              onChange:e=>setShowEdit({...showEdit,app_secret:e.target.value})}))),
+        React.createElement('div',{className:'form-row'},
+          showEdit.provider==='wps'?
+            React.createElement('div',{className:'form-field'},React.createElement('label',null,'Table ID (多维表格ID)'),
+              React.createElement('input',{value:showEdit.table_id||'',placeholder:'WPS 多维表格的 Table ID',
+                onChange:e=>setShowEdit({...showEdit,table_id:e.target.value})})):
+            React.createElement('div',{className:'form-field'},React.createElement('label',null,'文档 ID'),
+              React.createElement('input',{value:showEdit.doc_id||'',placeholder:'腾讯文档的文档 ID',
+                onChange:e=>setShowEdit({...showEdit,doc_id:e.target.value})})),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'同步数据表'),
+            React.createElement('select',{value:showEdit.sync_table||'employees',
+              onChange:e=>setShowEdit({...showEdit,sync_table:e.target.value})},
+              tables.map(tb=>React.createElement('option',{key:tb,value:tb},tableLabels[tb]||tb))))),
+        React.createElement('div',{className:'form-row'},
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'同步方向'),
+            React.createElement('select',{value:showEdit.sync_direction||'push',
+              onChange:e=>setShowEdit({...showEdit,sync_direction:e.target.value})},
+              React.createElement('option',{value:'push'},'推送 (系统 → 云文档)'),
+              React.createElement('option',{value:'pull'},'拉取 (云文档 → 系统)'))),
+          React.createElement('div',{className:'form-field'},React.createElement('label',null,'状态'),
+            React.createElement('select',{value:showEdit.status||'已启用',
+              onChange:e=>setShowEdit({...showEdit,status:e.target.value})},
+              React.createElement('option',{value:'已启用'},'已启用'),
+              React.createElement('option',{value:'已禁用'},'已禁用')))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end',marginTop:16}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setShowEdit(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:save},'保存')))));
+};
+
 // ══════ Clock ══════
 const ClockPage=({lang,t})=>{
   const[time,setTime]=useState(new Date());
@@ -2299,6 +2486,7 @@ const MENU = [
     {key:'accounts',icon:'🔑',label:'账号管理',roles:['admin','hr','mgr']},
     {key:'clock',icon:'🕐',label:'打卡'},
     {key:'admin',icon:'⚙️',label:'权限管理',roles:['admin']},
+    {key:'cloudsync',icon:'☁️',label:'云文档集成',roles:['admin','hr','mgr','fin']},
   ]}
 ];
 
@@ -2342,7 +2530,7 @@ const App=()=>{
     suppliers:SuppliersPage, container:ContainerPage, schedule:SchedulePage,
     dispatch:DispatchPage, recruit:RecruitPage, admin:AdminPage,
     orgchart:OrgChartPage, safety:SafetyPage, register:RegisterPage, compliance:CompliancePage,
-    regions:RegionPage,
+    regions:RegionPage, cloudsync:CloudSyncPage,
   };
   const PageComp=pages[page];
 
