@@ -413,8 +413,13 @@ async def test_update_employee_with_joined_fields(auth_headers):
         # Send the full object back (mimicking the frontend edit flow)
         emp["phone"] = "updated-phone-123"
         r = await ac.put(f"/api/employees/{eid}", headers=auth_headers, json=emp)
-    assert r.status_code == 200
-    assert r.json()["ok"] is True
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        # Verify the update actually persisted
+        r2 = await ac.get(f"/api/employees/{eid}", headers=auth_headers)
+        assert r2.status_code == 200
+        assert r2.json()["phone"] == "updated-phone-123"
 
 
 @pytest.mark.asyncio
