@@ -3642,3 +3642,145 @@ async def test_export_employees_includes_id_expiry(auth_headers):
     assert r.status_code == 200
     data = r.json()
     assert "id_expiry_date" in data["fields"]
+
+
+# ── Tests for performance optimizations ──
+
+@pytest.mark.asyncio
+async def test_batch_generate_accounts_optimized(auth_headers):
+    """Batch account generation should correctly handle multiple employees using batch queries."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Batch generate for multiple seeded employees without accounts
+        r = await ac.post("/api/accounts/batch-generate", headers=auth_headers,
+                          json={"employee_ids": ["YB-001", "YB-002", "YB-003"], "role": "worker"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert len(data["accounts"]) == 3
+    names = {a["name"] for a in data["accounts"]}
+    assert "张三" in names
+    assert "李四" in names
+    assert "王五" in names
+
+
+@pytest.mark.asyncio
+async def test_batch_generate_accounts_skips_existing(auth_headers):
+    """Batch account generation should skip employees who already have accounts."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # First batch
+        r1 = await ac.post("/api/accounts/batch-generate", headers=auth_headers,
+                           json={"employee_ids": ["YB-001", "YB-002"], "role": "worker"})
+        assert r1.status_code == 200
+        assert len(r1.json()["accounts"]) == 2
+
+        # Second batch with overlapping IDs - should skip already created
+        r2 = await ac.post("/api/accounts/batch-generate", headers=auth_headers,
+                           json={"employee_ids": ["YB-001", "YB-002", "YB-003"], "role": "worker"})
+        assert r2.status_code == 200
+        assert len(r2.json()["accounts"]) == 1  # Only YB-003 is new
+
+
+@pytest.mark.asyncio
+async def test_batch_generate_accounts_empty_list(auth_headers):
+    """Batch account generation should handle empty list gracefully."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/accounts/batch-generate", headers=auth_headers,
+                          json={"employee_ids": [], "role": "worker"})
+    assert r.status_code == 200
+    assert r.json()["accounts"] == []
+
+
+@pytest.mark.asyncio
+async def test_dashboard_consolidated_counts(auth_headers):
+    """Dashboard should return correct own/supplier counts from consolidated query."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/analytics/dashboard", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    # Verify own + supplier = total_emp (consolidated query)
+    assert data["own"] + data["supplier"] == data["total_emp"]
+    assert data["own"] > 0
+    assert data["supplier"] > 0
+
+
+@pytest.mark.asyncio
+async def test_regions_batch_warehouse_fetch(auth_headers):
+    """GET /api/regions should return enriched warehouse details from batch fetch."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/regions", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) >= 3
+    # Each region should have warehouses with correct fields
+    for region in data:
+        assert "warehouses" in region
+        for wh in region["warehouses"]:
+            assert "code" in wh
+            assert "name" in wh
+
+
+@pytest.mark.asyncio
+async def test_create_region_batch_warehouse_update(auth_headers):
+    """Creating a region should batch-update warehouse region fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/regions", headers=auth_headers, json={
+            "code": "REG-BATCH-TEST",
+            "name": "批量测试区",
+            "warehouse_codes": "UNA,DHL"
+        })
+        assert r.status_code == 200
+
+        # Verify both warehouses got their region field updated
+        whs = await ac.get("/api/warehouses", headers=auth_headers)
+        wh_data = whs.json()
+        for wh in wh_data:
+            if wh["code"] in ("UNA", "DHL"):
+                assert wh["region"] == "批量测试区"
+
+
+@pytest.mark.asyncio
+async def test_delete_region_batch_warehouse_clear(auth_headers):
+    """Deleting a region should batch-clear warehouse region fields."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # First create a region
+        await ac.post("/api/regions", headers=auth_headers, json={
+            "code": "REG-DEL-BATCH",
+            "name": "删除测试区",
+            "warehouse_codes": "UNA,DHL"
+        })
+        # Delete it
+        r = await ac.delete("/api/regions/REG-DEL-BATCH", headers=auth_headers)
+        assert r.status_code == 200
+
+        # Verify warehouses no longer reference the region
+        whs = await ac.get("/api/warehouses", headers=auth_headers)
+        wh_data = whs.json()
+        for wh in wh_data:
+            if wh["code"] in ("UNA", "DHL"):
+                assert wh.get("region", "") != "删除测试区"
+
+
+@pytest.mark.asyncio
+async def test_database_indexes_created():
+    """Verify that performance indexes are created in the database."""
+    db = database.get_db()
+    # Check that key indexes exist by querying sqlite_master
+    indexes = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"
+    ).fetchall()
+    db.close()
+    index_names = {r[0] for r in indexes}
+    # Verify new performance indexes
+    assert "idx_users_username" in index_names
+    assert "idx_leave_requests_status" in index_names
+    assert "idx_expense_claims_status" in index_names
+    assert "idx_timesheet_wh_status" in index_names
+    assert "idx_payslips_emp_month" in index_names
+    assert "idx_schedules_work_date" in index_names

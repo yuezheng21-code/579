@@ -664,16 +664,31 @@ async def batch_generate_accounts(request: Request, user=Depends(get_user)):
     employee_ids = data.get("employee_ids", [])
     role = data.get("role", "worker")
 
+    if not employee_ids:
+        return {"ok": True, "accounts": []}
+
     results = []
     db = database.get_db()
     
     try:
-        for eid in employee_ids:
-            emp = db.execute("SELECT * FROM employees WHERE id=?", (eid,)).fetchone()
-            if not emp: continue
+        # Batch-fetch all employees and existing users to avoid N+1 queries
+        placeholders = ",".join(["?"] * len(employee_ids))
+        emp_rows = db.execute(
+            f"SELECT id, name, primary_wh, biz_line FROM employees WHERE id IN ({placeholders})",
+            employee_ids
+        ).fetchall()
+        emp_map = {r["id"]: r for r in emp_rows}
 
-            existing = db.execute("SELECT * FROM users WHERE employee_id=?", (eid,)).fetchone()
-            if existing: continue
+        existing_rows = db.execute(
+            f"SELECT employee_id FROM users WHERE employee_id IN ({placeholders})",
+            employee_ids
+        ).fetchall()
+        existing_set = {r["employee_id"] for r in existing_rows}
+
+        for eid in employee_ids:
+            emp = emp_map.get(eid)
+            if not emp or eid in existing_set:
+                continue
 
             username = eid.lower().replace("-", "")
             password = generate_password(8)
@@ -822,17 +837,17 @@ def get_my_salary_config(user=Depends(get_user)):
         wh_list.extend(dispatch_list)
     wh_list = list(set(filter(None, wh_list)))
 
-    # 获取各仓库的薪资配置
+    # 获取各仓库的薪资配置 (batch query instead of per-warehouse)
     configs = []
-    for wh in wh_list:
-        cfg = db.execute("""
+    if wh_list:
+        placeholders = ",".join(["?"] * len(wh_list))
+        cfg_rows = db.execute(f"""
             SELECT wsc.*, w.name as warehouse_name
             FROM warehouse_salary_config wsc
             JOIN warehouses w ON w.code = wsc.warehouse_code
-            WHERE wsc.warehouse_code=? AND wsc.grade=?
-        """, (wh, emp["grade"])).fetchall()
-        for c in cfg:
-            configs.append(dict(c))
+            WHERE wsc.warehouse_code IN ({placeholders}) AND wsc.grade=?
+        """, wh_list + [emp["grade"]]).fetchall()
+        configs = [dict(c) for c in cfg_rows]
 
     db.close()
     return {"configs": configs}
@@ -2011,11 +2026,16 @@ def dashboard(user=Depends(get_user)):
         # Supplier-scoped dashboard: only show their workers' data
         if role == "sup" and user.get("supplier_id"):
             sid = user["supplier_id"]
+            # Combine employee counts into a single query instead of duplicate COUNT queries
+            emp_stats = db.execute(
+                "SELECT COUNT(*) total, COUNT(DISTINCT primary_wh) wh_count FROM employees WHERE status='在职' AND supplier_id=?",
+                (sid,)
+            ).fetchone()
             r = {
-                "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
+                "total_emp": emp_stats[0],
                 "own": 0,
-                "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
-                "wh_count": db.execute("SELECT COUNT(DISTINCT primary_wh) FROM employees WHERE status='在职' AND supplier_id=?", (sid,)).fetchone()[0],
+                "supplier": emp_stats[0],
+                "wh_count": emp_stats[1],
                 "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests lr JOIN employees e ON lr.employee_id=e.id WHERE lr.status='待审批' AND e.supplier_id=?", (sid,)).fetchone()[0],
                 "pending_expense": 0,
                 "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE supplier_id=? AND wh_status='待仓库审批'", (sid,)).fetchone()[0],
@@ -2030,26 +2050,39 @@ def dashboard(user=Depends(get_user)):
         # Warehouse-scoped dashboard
         if role == "wh" and user.get("warehouse_code"):
             wh = user["warehouse_code"]
+            # Combine total/own/supplier employee counts into a single query
+            src_counts = db.execute(
+                "SELECT source, COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) GROUP BY source",
+                (wh, f"%{wh}%")
+            ).fetchall()
+            src_map = {row["source"]: row["c"] for row in src_counts}
+            total_emp = sum(src_map.values())
             r = {
-                "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
-                "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
-                "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE source='供应商' AND status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0],
+                "total_emp": total_emp,
+                "own": src_map.get("自有", 0),
+                "supplier": src_map.get("供应商", 0),
                 "wh_count": 1,
                 "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests WHERE warehouse_code=? AND status='待审批'", (wh,)).fetchone()[0],
                 "pending_expense": 0,
                 "pending_ts": db.execute("SELECT COUNT(*) FROM timesheet WHERE warehouse_code=? AND wh_status='待仓库审批'", (wh,)).fetchone()[0],
                 "monthly_hrs": db.execute("SELECT COALESCE(SUM(hours),0) FROM timesheet WHERE warehouse_code=? AND work_date LIKE ?", (wh, f"{current_year_month}%")).fetchone()[0],
                 "grade_dist": [dict(r) for r in db.execute("SELECT grade,COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) GROUP BY grade ORDER BY grade", (wh, f"%{wh}%")).fetchall()],
-                "wh_dist": [{"w": wh, "c": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?)", (wh, f"%{wh}%")).fetchone()[0]}],
+                "wh_dist": [{"w": wh, "c": total_emp}],
                 "service_type_dist": [],
                 "dispatch_type_dist": [dict(r) for r in db.execute("SELECT dispatch_type, COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) AND dispatch_type IS NOT NULL GROUP BY dispatch_type", (wh, f"%{wh}%")).fetchall()],
             }
             return r
 
+        # Global dashboard: combine employee counts into a single query
+        src_counts = db.execute(
+            "SELECT source, COUNT(*) c FROM employees WHERE status='在职' GROUP BY source"
+        ).fetchall()
+        src_map = {row["source"]: row["c"] for row in src_counts}
+        total_emp = sum(src_map.values())
         r = {
-            "total_emp": db.execute("SELECT COUNT(*) FROM employees WHERE status='在职'").fetchone()[0],
-            "own": db.execute("SELECT COUNT(*) FROM employees WHERE source='自有' AND status='在职'").fetchone()[0],
-            "supplier": db.execute("SELECT COUNT(*) FROM employees WHERE source='供应商' AND status='在职'").fetchone()[0],
+            "total_emp": total_emp,
+            "own": src_map.get("自有", 0),
+            "supplier": src_map.get("供应商", 0),
             "wh_count": db.execute("SELECT COUNT(*) FROM warehouses").fetchone()[0],
             "pending_leave": db.execute("SELECT COUNT(*) FROM leave_requests WHERE status='待审批'").fetchone()[0],
             "pending_expense": db.execute("SELECT COUNT(*) FROM expense_claims WHERE status IN ('已提交','待审批')").fetchone()[0],
@@ -2303,15 +2336,24 @@ def get_regions(user=Depends(get_user)):
     try:
         regions = db.execute("SELECT * FROM regions ORDER BY code").fetchall()
         regions = [dict(r) for r in regions]
-        # Enrich each region with actual warehouse details
+        # Collect all warehouse codes across all regions in one pass
+        all_wh_codes = set()
         for reg in regions:
             wh_codes = [c.strip() for c in (reg.get("warehouse_codes") or "").split(",") if c.strip()]
-            wh_list = []
-            for wc in wh_codes:
-                wh = db.execute("SELECT code, name, address, manager, current_headcount FROM warehouses WHERE code=?", (wc,)).fetchone()
-                if wh:
-                    wh_list.append(dict(wh))
-            reg["warehouses"] = wh_list
+            all_wh_codes.update(wh_codes)
+        # Batch-fetch all warehouses at once instead of per-region queries
+        wh_map = {}
+        if all_wh_codes:
+            placeholders = ",".join(["?"] * len(all_wh_codes))
+            wh_rows = db.execute(
+                f"SELECT code, name, address, manager, current_headcount FROM warehouses WHERE code IN ({placeholders})",
+                list(all_wh_codes)
+            ).fetchall()
+            wh_map = {r["code"]: dict(r) for r in wh_rows}
+        # Enrich each region with cached warehouse details
+        for reg in regions:
+            wh_codes = [c.strip() for c in (reg.get("warehouse_codes") or "").split(",") if c.strip()]
+            reg["warehouses"] = [wh_map[wc] for wc in wh_codes if wc in wh_map]
         return regions
     finally:
         db.close()
@@ -2331,14 +2373,15 @@ async def create_region(request: Request, user=Depends(get_user)):
         insert("regions", data)
     except Exception as e:
         raise HTTPException(500, f"创建大区失败: {str(e)}")
-    # Update warehouse region fields
+    # Update warehouse region fields (batch update with IN clause)
     wh_codes = [c.strip() for c in (data.get("warehouse_codes") or "").split(",") if c.strip()]
     if wh_codes:
         db = database.get_db()
         try:
-            for wc in wh_codes:
-                db.execute("UPDATE warehouses SET region=?, updated_at=? WHERE code=?",
-                           (data["name"], datetime.now().isoformat(), wc))
+            now = datetime.now().isoformat()
+            placeholders = ",".join(["?"] * len(wh_codes))
+            db.execute(f"UPDATE warehouses SET region=?, updated_at=? WHERE code IN ({placeholders})",
+                       [data["name"], now] + wh_codes)
             db.commit()
         finally:
             db.close()
@@ -2360,10 +2403,12 @@ async def update_region(code: str, request: Request, user=Depends(get_user)):
         if not old:
             raise HTTPException(404, "大区不存在 / Region not found")
         old_wh_codes = [c.strip() for c in (old["warehouse_codes"] or "").split(",") if c.strip()]
-        # Clear old warehouse region fields
-        for wc in old_wh_codes:
-            db.execute("UPDATE warehouses SET region='', updated_at=? WHERE code=?",
-                       (datetime.now().isoformat(), wc))
+        # Clear old warehouse region fields (batch update with IN clause)
+        if old_wh_codes:
+            now_ts = datetime.now().isoformat()
+            placeholders = ",".join(["?"] * len(old_wh_codes))
+            db.execute(f"UPDATE warehouses SET region='', updated_at=? WHERE code IN ({placeholders})",
+                       [now_ts] + old_wh_codes)
         # Update region record
         sets = ",".join(f"{k}=?" for k in data.keys())
         db.execute(f"UPDATE regions SET {sets} WHERE code=?", list(data.values()) + [code])
@@ -2373,9 +2418,11 @@ async def update_region(code: str, request: Request, user=Depends(get_user)):
         else:
             new_wh_codes = old_wh_codes
         region_name = data.get("name", old["name"])
-        for wc in new_wh_codes:
-            db.execute("UPDATE warehouses SET region=?, updated_at=? WHERE code=?",
-                       (region_name, datetime.now().isoformat(), wc))
+        if new_wh_codes:
+            now_ts = datetime.now().isoformat()
+            placeholders = ",".join(["?"] * len(new_wh_codes))
+            db.execute(f"UPDATE warehouses SET region=?, updated_at=? WHERE code IN ({placeholders})",
+                       [region_name, now_ts] + new_wh_codes)
         db.commit()
     except HTTPException:
         raise
@@ -2396,11 +2443,13 @@ def delete_region(code: str, user=Depends(get_user)):
         old = db.execute("SELECT * FROM regions WHERE code=?", (code,)).fetchone()
         if not old:
             raise HTTPException(404, "大区不存在 / Region not found")
-        # Clear warehouse region fields
+        # Clear warehouse region fields (batch update with IN clause)
         wh_codes = [c.strip() for c in (old["warehouse_codes"] or "").split(",") if c.strip()]
-        for wc in wh_codes:
-            db.execute("UPDATE warehouses SET region='', updated_at=? WHERE code=?",
-                       (datetime.now().isoformat(), wc))
+        if wh_codes:
+            now_ts = datetime.now().isoformat()
+            placeholders = ",".join(["?"] * len(wh_codes))
+            db.execute(f"UPDATE warehouses SET region='', updated_at=? WHERE code IN ({placeholders})",
+                       [now_ts] + wh_codes)
         db.execute("DELETE FROM regions WHERE code=?", (code,))
         db.commit()
     except HTTPException:
@@ -3370,21 +3419,25 @@ async def generate_payslips(request: Request, user=Depends(get_user)):
             WHERE t.work_date LIKE ? || '%'
             GROUP BY t.employee_id
         """, (month,)).fetchall()
-        count = 0
-        for r in rows:
-            pid = str(uuid.uuid4())
-            db.execute("""
+        generated_by = user.get("display_name", "")
+        payslip_data = [
+            (str(uuid.uuid4()), r["employee_id"], r["name"], month,
+             r["total_hours"], r["hourly_pay"], r["piece_pay"],
+             r["perf_bonus"], r["other_bonus"], r["gross_pay"],
+             r["ssi_deduct"], r["tax_deduct"], r["net_pay"],
+             generated_by)
+            for r in rows
+        ]
+        if payslip_data:
+            cursor = db.cursor()
+            cursor.executemany("""
                 INSERT OR REPLACE INTO payslips
                 (id, employee_id, employee_name, month, total_hours, hourly_pay,
                  piece_pay, perf_bonus, other_bonus, gross_pay, ssi_deduct, tax_deduct,
                  other_deduct, net_pay, status, generated_by)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,'待确认',?)
-            """, (pid, r["employee_id"], r["name"], month,
-                  r["total_hours"], r["hourly_pay"], r["piece_pay"],
-                  r["perf_bonus"], r["other_bonus"], r["gross_pay"],
-                  r["ssi_deduct"], r["tax_deduct"], r["net_pay"],
-                  user.get("display_name", "")))
-            count += 1
+            """, payslip_data)
+        count = len(payslip_data)
         db.commit()
         return {"ok": True, "count": count, "month": month}
     except Exception as e:
