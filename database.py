@@ -14,8 +14,12 @@ if USE_POSTGRES:
     import psycopg2
     import psycopg2.extras
     import psycopg2.extensions
+    import psycopg2.pool
 else:
     import sqlite3
+
+# Connection pool for PostgreSQL (reuse connections instead of creating new ones per request)
+_pg_pool = None
 
 
 class PgRowWrapper:
@@ -164,7 +168,13 @@ class DBWrapper:
         return self._conn.rollback()
     
     def close(self):
-        return self._conn.close()
+        if self._is_postgres and _pg_pool is not None:
+            try:
+                _pg_pool.putconn(self._conn)
+            except Exception:
+                self._conn.close()
+        else:
+            return self._conn.close()
     
     @property
     def row_factory(self):
@@ -179,14 +189,20 @@ class DBWrapper:
 
 
 def get_db():
-    """Get database connection with abstraction layer"""
+    """Get database connection with abstraction layer.
+    Uses connection pooling for PostgreSQL to avoid creating a new connection per request.
+    """
+    global _pg_pool
     if USE_POSTGRES:
-        conn = psycopg2.connect(
-            DATABASE_URL,
-            connect_timeout=5,
-            options="-c statement_timeout=30000",
-        )
-        # Set autocommit to False to match SQLite behavior
+        if _pg_pool is None:
+            _pg_pool = psycopg2.pool.SimpleConnectionPool(
+                minconn=2,
+                maxconn=20,
+                dsn=DATABASE_URL,
+                connect_timeout=5,
+                options="-c statement_timeout=30000",
+            )
+        conn = _pg_pool.getconn()
         conn.autocommit = False
         return DBWrapper(conn, is_postgres=True)
     else:
@@ -733,6 +749,14 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_employee_files_employee ON employee_files(employee_id)",
         "CREATE INDEX IF NOT EXISTS idx_dispatch_transfers_employee ON dispatch_transfers(employee_id)",
         "CREATE INDEX IF NOT EXISTS idx_enterprise_docs_warehouse ON enterprise_documents(warehouse_code)",
+        # Indexes for frequently queried columns (login, filtering, dashboard)
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)",
+        "CREATE INDEX IF NOT EXISTS idx_leave_requests_status ON leave_requests(status)",
+        "CREATE INDEX IF NOT EXISTS idx_expense_claims_status ON expense_claims(status)",
+        "CREATE INDEX IF NOT EXISTS idx_dispatch_needs_status ON dispatch_needs(status)",
+        "CREATE INDEX IF NOT EXISTS idx_schedules_work_date ON schedules(work_date)",
+        "CREATE INDEX IF NOT EXISTS idx_timesheet_wh_status ON timesheet(wh_status)",
+        "CREATE INDEX IF NOT EXISTS idx_payslips_emp_month ON payslips(employee_id, month)",
     ]
     for idx_sql in indexes:
         try:
@@ -1144,19 +1168,18 @@ def seed_data():
         ("WSC-EMR-P3-装卸","EMR","P3","装卸",14.0,180,320,380,25,50,100,90,120,75,'[{"skill":"叉车","bonus":1.5}]',"按柜","2026-01-01","2026-12-31",""),
         ("WSC-EMR-P4-管理","EMR","P4","管理",15.5,0,0,0,25,50,100,130,180,110,'[]',"按小时","2026-01-01","2026-12-31",""),
     ]
-    for wsc in wh_salary_configs:
-        c.execute("""INSERT INTO warehouse_salary_config(id,warehouse_code,grade,position_type,
+    c.executemany("""INSERT INTO warehouse_salary_config(id,warehouse_code,grade,position_type,
             hourly_rate,container_rate_20gp,container_rate_40gp,container_rate_45hc,
             night_bonus_pct,weekend_bonus_pct,holiday_bonus_pct,perf_base,perf_excellent_bonus,perf_good_bonus,
             special_skill_bonus,settle_method,effective_from,effective_to,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(id) DO NOTHING""", wsc)
+            ON CONFLICT(id) DO NOTHING""", wh_salary_configs)
 
     # ── Suppliers ──
-    for s in [("SUP-001","德信人力","人力供应商","渊博","CT-2025-001","2025-01-01","2026-12-31","月结","EUR","陈刚","+49-176-2001","chen@dexin.de","Köln","供应商自行报税","仓内操作,装卸柜",'["纯派遣","流程承包"]',"Sparkasse Köln","DE89370400440532013100",50,15,"合作中","A",""),
+    suppliers_data = [("SUP-001","德信人力","人力供应商","渊博","CT-2025-001","2025-01-01","2026-12-31","月结","EUR","陈刚","+49-176-2001","chen@dexin.de","Köln","供应商自行报税","仓内操作,装卸柜",'["纯派遣","流程承包"]',"Sparkasse Köln","DE89370400440532013100",50,15,"合作中","A",""),
               ("SUP-002","欧华劳务","人力供应商","渊博","CT-2025-002","2025-03-01","2026-06-30","半月结","EUR","赵丽","+49-176-2002","zhao@ouhua.de","Düsseldorf","我方代报税","装卸柜,叉车",'["纯派遣"]',"Deutsche Bank","DE89370400440532013200",30,8,"合作中","B",""),
-              ("SUP-003","环球人才","人力供应商","579","CT-2025-003","2025-06-01","2026-12-31","月结","EUR","孙明","+49-176-2003","sun@global.de","Duisburg","供应商自行报税","仓内操作,装卸柜,管理",'["纯派遣","整仓承包"]',"Commerzbank","DE89370400440532013300",40,10,"合作中","A","")]:
-        sup_data = s+("","")
-        c.execute("INSERT INTO suppliers VALUES("+",".join(["?"]*len(sup_data))+")", sup_data)
+              ("SUP-003","环球人才","人力供应商","579","CT-2025-003","2025-06-01","2026-12-31","月结","EUR","孙明","+49-176-2003","sun@global.de","Duisburg","供应商自行报税","仓内操作,装卸柜,管理",'["纯派遣","整仓承包"]',"Commerzbank","DE89370400440532013300",40,10,"合作中","A","")]
+    sup_insert_sql = "INSERT INTO suppliers VALUES("+",".join(["?"]*25)+")"
+    c.executemany(sup_insert_sql, [s+("","") for s in suppliers_data])
 
     # ── Employees ──
     emps = [
@@ -1173,8 +1196,8 @@ def seed_data():
         ("YB-011","赵慧","+49-176-0020",None,"CN","女","1990-06-15","护照","E12345020","Köln 88","自有",None,"渊博","人事部","UNA","","HR专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T020","88901234567","1","SS-020","DE11112222333344445555","AOK","中,德,英","","劳动合同",None,"2024-03-01","2027-02-28","赵明","+49-176-9020",None,None,20,30,"在职","2024-03-01",None,"2001","YB-011",0),
         ("YB-012","孙琳","+49-176-0021",None,"CN","女","1988-03-20","护照","E12345021","Köln 99","自有",None,"渊博","财务部","UNA","","财务专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T021","99012345678","1","SS-021","DE22223333444455556666","TK","中,德","","劳动合同",None,"2024-05-01","2027-04-30","孙明","+49-176-9021",None,None,20,30,"在职","2024-05-01",None,"2002","YB-012",0),
     ]
-    for e in emps:
-        c.execute("INSERT INTO employees(id,name,phone,email,nationality,gender,birth_date,id_type,id_number,address,source,supplier_id,biz_line,department,primary_wh,dispatch_whs,position,grade,wage_level,settle_method,base_salary,hourly_rate,perf_bonus,extra_bonus,tax_mode,tax_no,tax_id,tax_class,ssn,iban,health_insurance,languages,special_skills,contract_type,dispatch_type,contract_start,contract_end,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,annual_leave_days,sick_leave_days,status,join_date,leave_date,pin,file_folder,has_account) VALUES("+",".join(["?"]*len(e))+")", e)
+    emp_insert_sql = "INSERT INTO employees(id,name,phone,email,nationality,gender,birth_date,id_type,id_number,address,source,supplier_id,biz_line,department,primary_wh,dispatch_whs,position,grade,wage_level,settle_method,base_salary,hourly_rate,perf_bonus,extra_bonus,tax_mode,tax_no,tax_id,tax_class,ssn,iban,health_insurance,languages,special_skills,contract_type,dispatch_type,contract_start,contract_end,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,annual_leave_days,sick_leave_days,status,join_date,leave_date,pin,file_folder,has_account) VALUES("+",".join(["?"]*len(emps[0]))+")"
+    c.executemany(emp_insert_sql, emps)
 
     # ── Regions - 大区管理 (must follow employees due to FK) ──
     for reg in [
@@ -1210,10 +1233,9 @@ def seed_data():
         ("HR-ASST","人事助理","HR Assistant","Personalassistent","人事","M","M1","hr_assistant",45,"all","none",0,0,"协助人事工作"),
         ("HR-SPEC","人事专员","HR Specialist","Personalspezialist","人事","M","M2","hr_specialist",40,"all","none",0,0,"独立人事流程"),
     ]
-    for jp in job_positions_data:
-        c.execute("""INSERT INTO job_positions(code,title_zh,title_en,title_de,category,series,grade_code,
+    c.executemany("""INSERT INTO job_positions(code,title_zh,title_en,title_de,category,series,grade_code,
             default_role,level,data_scope,salary_scope,can_dispatch_request,can_transfer_request,description)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING""", jp)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING""", job_positions_data)
 
     # ── Leave Balances ──
     for e in emps:
