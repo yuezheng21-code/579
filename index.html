@@ -708,15 +708,20 @@ const WHSalaryPage=({t})=>{
 };
 
 // ══════ Employees ══════
-const EmpPage=({t})=>{
+const EmpPage=({t,gFilterWh,gFilterSup,gFilterDept,masterWhs,masterSups,refreshMaster})=>{
   const[emps,setEmps]=useState([]);const[q,setQ]=useState('');const[showEdit,setShowEdit]=useState(null);
   const[whList,setWhList]=useState([]);const[supList,setSupList]=useState([]);
   useEffect(()=>{API.get('/api/employees').then(setEmps);API.get('/api/warehouses').then(r=>setWhList(r||[]));API.get('/api/suppliers').then(r=>setSupList(r||[]))},[]);
-  const filtered=emps.filter(e=>`${e.name}${e.id}${e.grade}${e.primary_wh}${e.warehouse_name||''}${e.department||''}`.includes(q));
+  const filtered=emps.filter(e=>{
+    if(gFilterWh&&e.primary_wh!==gFilterWh)return false;
+    if(gFilterSup&&e.supplier_id!==gFilterSup)return false;
+    if(gFilterDept&&e.department!==gFilterDept)return false;
+    return `${e.name}${e.id}${e.grade}${e.primary_wh}${e.warehouse_name||''}${e.department||''}`.includes(q);
+  });
   const save=async()=>{
     if(showEdit._isNew){const d={...showEdit};delete d._isNew;const r=await API.post('/api/employees',d);if(!r)return;if(r.account){showToast(`保存成功，账号已生成: ${r.account.username} / ${r.account.password}，角色: ${r.account.role}`);}else{showToast('保存成功');}}
     else{const r=await API.put(`/api/employees/${showEdit.id}`,showEdit);if(!r)return;showToast('保存成功');}
-    setShowEdit(null);API.get('/api/employees').then(setEmps);
+    setShowEdit(null);API.get('/api/employees').then(setEmps);if(refreshMaster)refreshMaster();
   };
   const doExport=async()=>{const r=await API.get('/api/export/employees');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='employees.json';a.click();showToast('导出成功');}};
   const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.csv,.xlsx,.xls,.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const ext=f.name.split('.').pop().toLowerCase();if(ext==='json'){const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/employees',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}}else{const form=new FormData();form.append('file',f);try{const resp=await fetch('/api/import-file/employees',{method:'POST',headers:{'Authorization':'Bearer '+localStorage.getItem('token')},body:form});const r=await resp.json();if(r.ok)showToast(`导入完成: ${r.success||0} 条成功, ${(r.errors||[]).length} 条失败`);else showToast('导入失败: '+(r.detail||'未知错误'),'error');API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}}};inp.click();};
@@ -907,10 +912,15 @@ const GradePage=({t})=>{
 };
 
 // ══════ Timesheet ══════
-const TSPage=({t})=>{
+const TSPage=({t,gFilterWh,gFilterSup,gFilterDept})=>{
   const[ts,setTs]=useState([]);const[showEdit,setShowEdit]=useState(null);const[emps,setEmps]=useState([]);const[whs,setWhs]=useState([]);
   const[selIds,setSelIds]=useState([]);
   useEffect(()=>{API.get('/api/timesheet').then(setTs);API.get('/api/employees').then(setEmps);API.get('/api/warehouses').then(setWhs);},[]);
+  const filteredTs=ts.filter(r=>{
+    if(gFilterWh&&r.warehouse_code!==gFilterWh)return false;
+    if(gFilterSup&&r.supplier_id!==gFilterSup)return false;
+    return true;
+  });
   const save=async()=>{
     let r;
     if(showEdit._isNew){const d={...showEdit};delete d._isNew;r=await API.post('/api/timesheet',d);}
@@ -923,7 +933,7 @@ const TSPage=({t})=>{
   const batchApprove=(type)=>{if(!selIds.length)return showToast('请先选择记录');
     API.post('/api/timesheet/batch-approve',{ids:selIds,type}).then(()=>{showToast('审批成功');setSelIds([]);API.get('/api/timesheet').then(setTs)})};
   const toggleSel=(id)=>setSelIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id]);
-  const toggleAll=()=>{const visible=ts.slice(0,100).map(r=>r.id);const allSelected=visible.every(id=>selIds.includes(id));setSelIds(allSelected?[]:visible)};
+  const toggleAll=()=>{const visible=filteredTs.slice(0,100).map(r=>r.id);const allSelected=visible.every(id=>selIds.includes(id));setSelIds(allSelected?[]:visible)};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
       React.createElement('button',{className:'btn btn-pri',onClick:()=>{const now=new Date().toISOString().slice(0,10);setShowEdit({_isNew:true,employee_id:'',employee_name:'',work_date:now,warehouse_code:'',start_time:'08:00',end_time:'17:00',hours:8,position:'库内',grade:'P1',settle_method:'按小时',base_rate:12,hourly_pay:96,notes:''});}},'新增工时'),
@@ -935,13 +945,13 @@ const TSPage=({t})=>{
         React.createElement('button',{className:'btn-sm',style:{background:'var(--pri)'},onClick:()=>batchApprove('wh')},'驻仓经理审批'),
         React.createElement('button',{className:'btn-sm',style:{background:'#f59e0b'},onClick:()=>batchApprove('regional')},'区域经理审批'),
         React.createElement('button',{className:'btn-sm',style:{background:'var(--green)'},onClick:()=>batchApprove('fin')},'财务确认'))),
-    React.createElement('div',{style:{marginBottom:8,color:'var(--text2)',fontSize:13}},`共 ${ts.length} 条记录`),
+    React.createElement('div',{style:{marginBottom:8,color:'var(--text2)',fontSize:13}},`共 ${filteredTs.length} 条记录`),
     React.createElement('div',{className:'table-wrap'},
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
-          React.createElement('th',null,React.createElement('input',{type:'checkbox',checked:selIds.length===ts.slice(0,100).length&&ts.length>0,onChange:toggleAll})),
+          React.createElement('th',null,React.createElement('input',{type:'checkbox',checked:selIds.length===filteredTs.slice(0,100).length&&filteredTs.length>0,onChange:toggleAll})),
           ['日期','员工','职级','仓库','岗位','时段','工时','时薪','应付','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
-        React.createElement('tbody',null,ts.slice(0,100).map(r=>React.createElement('tr',{key:r.id},
+        React.createElement('tbody',null,filteredTs.slice(0,100).map(r=>React.createElement('tr',{key:r.id},
           React.createElement('td',null,React.createElement('input',{type:'checkbox',checked:selIds.includes(r.id),onChange:()=>toggleSel(r.id)})),
           React.createElement('td',null,r.work_date),React.createElement('td',null,r.employee_name),
           React.createElement('td',{style:{color:gradeColor(r.grade),fontWeight:700}},r.grade),
@@ -1041,10 +1051,15 @@ const SettPage=({t})=>{
 };
 
 // ══════ Leave ══════
-const LeavePage=({t})=>{
+const LeavePage=({t,gFilterWh,gFilterSup,gFilterDept})=>{
   const[reqs,setReqs]=useState([]);const[types,setTypes]=useState([]);const[tab,setTab]=useState('req');
   useEffect(()=>{API.get('/api/leave-requests').then(setReqs);API.get('/api/leave-types').then(setTypes);},[]);
   const typeMap=Object.fromEntries(types.map(t=>[t.code,t.name_zh]));
+  const filteredReqs=reqs.filter(r=>{
+    if(gFilterWh&&r.warehouse_code!==gFilterWh)return false;
+    if(gFilterDept&&r.department!==gFilterDept)return false;
+    return true;
+  });
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'tabs'},
       [['req','假条记录'],['type','假期类型']].map(([k,l])=>React.createElement('div',{key:k,className:`tab ${tab===k?'active':''}`,onClick:()=>setTab(k)},l))),
@@ -1052,7 +1067,7 @@ const LeavePage=({t})=>{
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
           ['申请号','员工','职级','类型','开始','结束','天数','原因','状态'].map(h=>React.createElement('th',{key:h},h)))),
-        React.createElement('tbody',null,reqs.map(r=>React.createElement('tr',{key:r.id},
+        React.createElement('tbody',null,filteredReqs.map(r=>React.createElement('tr',{key:r.id},
           React.createElement('td',null,r.id),React.createElement('td',null,r.employee_name),
           React.createElement('td',{style:{color:gradeColor(r.grade),fontWeight:700}},r.grade),
           React.createElement('td',null,typeMap[r.leave_type]||r.leave_type),
@@ -1072,15 +1087,20 @@ const LeavePage=({t})=>{
 };
 
 // ══════ Expense ══════
-const ExpPage=({t})=>{
+const ExpPage=({t,gFilterWh,gFilterSup,gFilterDept})=>{
   const[exps,setExps]=useState([]);
   useEffect(()=>{API.get('/api/expenses').then(setExps)},[]);
+  const filteredExps=exps.filter(e=>{
+    if(gFilterWh&&e.warehouse_code!==gFilterWh)return false;
+    if(gFilterDept&&e.department!==gFilterDept)return false;
+    return true;
+  });
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'table-wrap'},
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
           ['报销号','员工','职级','类型','金额','日期','描述','状态'].map(h=>React.createElement('th',{key:h},h)))),
-        React.createElement('tbody',null,exps.map(e=>React.createElement('tr',{key:e.id},
+        React.createElement('tbody',null,filteredExps.map(e=>React.createElement('tr',{key:e.id},
           React.createElement('td',null,e.id),React.createElement('td',null,e.employee_name),
           React.createElement('td',{style:{color:gradeColor(e.grade),fontWeight:700}},e.grade),
           React.createElement('td',null,e.claim_type),
@@ -1191,7 +1211,7 @@ const FilePage=({t})=>{
 };
 
 // ══════ Warehouse Management ══════
-const WarehousePage=({t})=>{
+const WarehousePage=({t,refreshMaster})=>{
   const[whs,setWhs]=useState([]);const[showEdit,setShowEdit]=useState(null);
   useEffect(()=>{API.get('/api/warehouses').then(setWhs);},[]);
   const save=async()=>{
@@ -1204,7 +1224,7 @@ const WarehousePage=({t})=>{
     }
     if(!r)return;
     showToast('保存成功');setShowEdit(null);
-    API.get('/api/warehouses').then(setWhs);
+    API.get('/api/warehouses').then(setWhs);if(refreshMaster)refreshMaster();
   };
   const coopColors={'自营':'var(--green)','合作派遣':'var(--blue)','外包':'var(--orange)'};
   return React.createElement('div',{className:'fade'},
@@ -1349,7 +1369,7 @@ const ClockPage=({lang,t})=>{
 };
 
 // ══════ Suppliers Page ══════
-const SuppliersPage=({t,user})=>{
+const SuppliersPage=({t,user,refreshMaster})=>{
   const[sups,setSups]=useState([]);const[showEdit,setShowEdit]=useState(null);
   const[activities,setActivities]=useState(null);const[actTab,setActTab]=useState('workers');
   const isSupplier=user&&user.role==='sup';
@@ -1367,7 +1387,7 @@ const SuppliersPage=({t,user})=>{
     }
     if(!r)return;
     showToast('保存成功');setShowEdit(null);
-    API.get('/api/suppliers').then(setSups);
+    API.get('/api/suppliers').then(setSups);if(refreshMaster)refreshMaster();
   };
   // Supplier user view: show worker activities
   if(isSupplier&&activities)return React.createElement('div',{className:'fade'},
@@ -1550,9 +1570,13 @@ const ContainerPage=({t})=>{
 };
 
 // ══════ Schedule Page ══════
-const SchedulePage=({t})=>{
+const SchedulePage=({t,gFilterWh,gFilterSup,gFilterDept})=>{
   const[rows,setRows]=useState([]);const[showEdit,setShowEdit]=useState(null);const[whs,setWhs]=useState([]);const[emps,setEmps]=useState([]);
   useEffect(()=>{API.get('/api/schedules').then(setRows);API.get('/api/warehouses').then(setWhs);API.get('/api/employees').then(setEmps);},[]);
+  const filteredRows=rows.filter(r=>{
+    if(gFilterWh&&r.warehouse_code!==gFilterWh)return false;
+    return true;
+  });
   const save=async()=>{
     let r;
     if(showEdit._isNew){const d={...showEdit};delete d._isNew;r=await API.post('/api/schedules',d);}
@@ -1591,7 +1615,7 @@ const SchedulePage=({t})=>{
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
           ['编号','员工','仓库','日期','班次','开始','结束','岗位','状态','操作'].map(h=>React.createElement('th',{key:h},h)))),
-        React.createElement('tbody',null,rows.map(r=>React.createElement('tr',{key:r.id},
+        React.createElement('tbody',null,filteredRows.map(r=>React.createElement('tr',{key:r.id},
           React.createElement('td',null,r.id),React.createElement('td',{style:{fontWeight:700}},r.employee_name||'-'),
           React.createElement('td',null,r.warehouse_code||'-'),React.createElement('td',null,r.work_date||'-'),
           React.createElement('td',null,r.shift||'白班'),React.createElement('td',null,r.start_time||'-'),
@@ -2286,8 +2310,26 @@ const App=()=>{
   const[lang,setLang]=useState('zh');
   const[sideOpen,setSide]=useState(false);
   const t=T[lang];
+  // 全局主表联动筛选 (Global master table filter linkage)
+  const[gFilterWh,setGFilterWh]=useState('');
+  const[gFilterSup,setGFilterSup]=useState('');
+  const[gFilterDept,setGFilterDept]=useState('');
+  const[masterWhs,setMasterWhs]=useState([]);
+  const[masterSups,setMasterSups]=useState([]);
+  const[masterDepts,setMasterDepts]=useState([]);
+  const[masterVer,setMasterVer]=useState(0);
+  const refreshMaster=()=>setMasterVer(v=>v+1);
 
   useEffect(()=>{if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(()=>{})},[]);
+  useEffect(()=>{
+    if(!user)return;
+    API.get('/api/warehouses').then(r=>setMasterWhs(r||[]));
+    API.get('/api/suppliers').then(r=>setMasterSups(r||[]));
+    API.get('/api/employees').then(r=>{
+      const depts=[...new Set((r||[]).map(e=>e.department).filter(Boolean))].sort();
+      setMasterDepts(depts);
+    });
+  },[user,masterVer]);
 
   if(!user) return React.createElement(LoginPage,{onLogin:setUser,lang,setLang});
 
@@ -2332,11 +2374,26 @@ const App=()=>{
       React.createElement('div',{className:'header'},
         React.createElement('div',{className:'menu-btn',onClick:()=>setSide(!sideOpen)},'☰'),
         React.createElement('div',{className:'title'},t[page]||page),
+        React.createElement('div',{className:'global-filter',style:{display:'flex',gap:6,alignItems:'center',marginLeft:12,flex:'1'}},
+          React.createElement('select',{value:gFilterWh,onChange:e=>{setGFilterWh(e.target.value)},
+            style:{padding:'2px 6px',borderRadius:4,fontSize:12,background:'var(--card)',color:'var(--text)',border:'1px solid var(--border)',maxWidth:120}},
+            React.createElement('option',{value:''},'全部仓库'),
+            masterWhs.map(w=>React.createElement('option',{key:w.code,value:w.code},w.name||w.code))),
+          React.createElement('select',{value:gFilterSup,onChange:e=>{setGFilterSup(e.target.value)},
+            style:{padding:'2px 6px',borderRadius:4,fontSize:12,background:'var(--card)',color:'var(--text)',border:'1px solid var(--border)',maxWidth:120}},
+            React.createElement('option',{value:''},'全部供应商'),
+            masterSups.map(s=>React.createElement('option',{key:s.id,value:s.id},s.name||s.id))),
+          React.createElement('select',{value:gFilterDept,onChange:e=>{setGFilterDept(e.target.value)},
+            style:{padding:'2px 6px',borderRadius:4,fontSize:12,background:'var(--card)',color:'var(--text)',border:'1px solid var(--border)',maxWidth:120}},
+            React.createElement('option',{value:''},'全部部门'),
+            masterDepts.map(d=>React.createElement('option',{key:d,value:d},d))),
+          (gFilterWh||gFilterSup||gFilterDept)?React.createElement('span',{onClick:()=>{setGFilterWh('');setGFilterSup('');setGFilterDept('')},
+            style:{cursor:'pointer',fontSize:11,color:'var(--pri)'}},'✕ 清除'):null),
         React.createElement('div',{className:'user-info'},
           React.createElement('span',{className:'badge'},user.role||'admin'),
           React.createElement('span',null,user.display_name||'Admin'))),
       React.createElement('div',{className:'content'},
-        PageComp?React.createElement(PageComp,{t,user,lang}):React.createElement('div',{className:'empty'},'模块开发中...'))),
+        PageComp?React.createElement(PageComp,{t,user,lang,gFilterWh,gFilterSup,gFilterDept,masterWhs,masterSups,refreshMaster}):React.createElement('div',{className:'empty'},'模块开发中...'))),
     React.createElement('div',{id:'toast',className:'toast',style:{display:'none'}}));
 };
 
