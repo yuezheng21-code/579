@@ -301,6 +301,8 @@ def _sanitize_employee_fk_fields(data: dict) -> dict:
     return data
 
 # ── Master Table Cascade Sync (主表联动) ──
+# NOTE: These cascade functions modify the database but do NOT commit.
+# The caller is responsible for committing the transaction to ensure atomicity.
 def _cascade_employee_to_users(eid: str, data: dict, db):
     """When employee master record changes, sync key fields to linked users table.
     花名册 → 用户账号 联动同步"""
@@ -2331,7 +2333,7 @@ def _get_scoped_employee_ids(user: dict) -> tuple:
     # For own_warehouse and regional: get employees by warehouse, further filter by department for non-mgr roles
     wh = _get_employee_warehouse(user)
     if scope == "regional":
-        region_whs = _get_region_warehouses(wh) if wh else [wh] if wh else []
+        region_whs = _get_region_warehouses(wh) if wh else []
         if not region_whs:
             eid = user.get("employee_id", "")
             return [eid] if eid else [], "self_only"
