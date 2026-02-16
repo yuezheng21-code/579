@@ -3429,8 +3429,8 @@ async def generate_payslips(request: Request, user=Depends(get_user)):
             for r in rows
         ]
         if payslip_data:
-            c = db.cursor()
-            c.executemany("""
+            cursor = db.cursor()
+            cursor.executemany("""
                 INSERT OR REPLACE INTO payslips
                 (id, employee_id, employee_name, month, total_hours, hourly_pay,
                  piece_pay, perf_bonus, other_bonus, gross_pay, ssi_deduct, tax_deduct,
