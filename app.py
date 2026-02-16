@@ -300,6 +300,50 @@ def _sanitize_employee_fk_fields(data: dict) -> dict:
             data[fk_col] = None
     return data
 
+# ── Master Table Cascade Sync (主表联动) ──
+# NOTE: These cascade functions modify the database but do NOT commit.
+# The caller is responsible for committing the transaction to ensure atomicity.
+def _cascade_employee_to_users(eid: str, data: dict, db):
+    """When employee master record changes, sync key fields to linked users table.
+    花名册 → 用户账号 联动同步"""
+    sync_map = {
+        "primary_wh": "warehouse_code",
+        "supplier_id": "supplier_id",
+        "name": "display_name",
+        "biz_line": "biz_line",
+    }
+    updates = {}
+    for emp_field, user_field in sync_map.items():
+        if emp_field in data:
+            updates[user_field] = data[emp_field]
+    if not updates:
+        return
+    sets = ",".join(f"{k}=?" for k in updates.keys())
+    db.execute(f"UPDATE users SET {sets} WHERE employee_id=?",
+               list(updates.values()) + [eid])
+
+def _cascade_warehouse_to_users(code: str, data: dict, db):
+    """When warehouse master record changes, sync region to users linked by warehouse_code.
+    仓库设置 → 用户账号 联动同步"""
+    # If warehouse name changes, no column in users to update, but we sync biz_line if present
+    if "biz_line" in data:
+        db.execute("UPDATE users SET biz_line=? WHERE warehouse_code=?",
+                   (data["biz_line"], code))
+
+def _cascade_warehouse_to_employees(code: str, data: dict, db):
+    """When warehouse master record changes, sync key fields to linked employees.
+    仓库设置 → 花名册 联动同步"""
+    if "biz_line" in data:
+        db.execute("UPDATE employees SET biz_line=? WHERE primary_wh=?",
+                   (data["biz_line"], code))
+
+def _cascade_supplier_to_users(sid: str, data: dict, db):
+    """When supplier master record changes, sync display_name to users linked by supplier_id.
+    供应商 → 用户账号 联动同步"""
+    if "name" in data:
+        db.execute("UPDATE users SET display_name=? WHERE supplier_id=? AND employee_id IS NULL",
+                   (data["name"], sid))
+
 # ── Auth ──
 class LoginReq(BaseModel):
     username: str
@@ -383,7 +427,18 @@ def get_employees(user=Depends(get_user)):
             rows = db.execute(f"{_EMP_JOIN_SQL} WHERE e.primary_wh=? OR e.dispatch_whs LIKE ? ORDER BY e.id DESC",
                               (wh, f"%{wh}%")).fetchall()
         else:
-            rows = db.execute(f"{_EMP_JOIN_SQL} ORDER BY e.id DESC").fetchall()
+            # 根据职级、部门、仓库做权限过滤
+            emp_ids, scope = _get_scoped_employee_ids(user)
+            if scope == "all":
+                rows = db.execute(f"{_EMP_JOIN_SQL} ORDER BY e.id DESC").fetchall()
+            elif emp_ids is not None and len(emp_ids) > 0:
+                placeholders = ",".join(["?"] * len(emp_ids))
+                rows = db.execute(f"{_EMP_JOIN_SQL} WHERE e.id IN ({placeholders}) ORDER BY e.id DESC",
+                                  tuple(emp_ids)).fetchall()
+            elif emp_ids is not None:
+                rows = []
+            else:
+                rows = db.execute(f"{_EMP_JOIN_SQL} ORDER BY e.id DESC").fetchall()
         rows = [dict(r) for r in rows]
     finally:
         db.close()
@@ -462,10 +517,18 @@ async def update_employee(eid: str, request: Request, user=Depends(get_user)):
     if not data:
         raise HTTPException(403, "无可编辑字段")
     _sanitize_employee_fk_fields(data)
+    db = database.get_db()
     try:
-        update("employees", "id", eid, data)
+        sets = ",".join(f"{k}=?" for k in data.keys())
+        db.execute(f"UPDATE employees SET {sets} WHERE id=?", list(data.values()) + [eid])
+        # 主表联动: 花名册变更 → 同步用户账号
+        _cascade_employee_to_users(eid, data, db)
+        db.commit()
     except Exception as e:
+        db.rollback()
         raise HTTPException(500, f"更新员工失败: {str(e)}")
+    finally:
+        db.close()
     audit_log(user.get("username", ""), "update", "employees", eid, json.dumps(list(data.keys())))
     return {"ok": True}
 
@@ -973,10 +1036,18 @@ async def update_supplier(sid: str, request: Request, user=Depends(get_user)):
     data = await request.json()
     data.pop("id", None)
     data["updated_at"] = datetime.now().isoformat()
+    db = database.get_db()
     try:
-        update("suppliers", "id", sid, data)
+        sets = ",".join(f"{k}=?" for k in data.keys())
+        db.execute(f"UPDATE suppliers SET {sets} WHERE id=?", list(data.values()) + [sid])
+        # 主表联动: 供应商变更 → 同步用户账号
+        _cascade_supplier_to_users(sid, data, db)
+        db.commit()
     except Exception as e:
+        db.rollback()
         raise HTTPException(500, f"更新供应商失败: {str(e)}")
+    finally:
+        db.close()
     audit_log(user.get("username", ""), "update", "suppliers", sid, json.dumps(list(data.keys())))
     return {"ok": True}
 
@@ -1096,10 +1167,19 @@ async def update_warehouse(code: str, request: Request, user=Depends(get_user)):
     data = await request.json()
     data.pop("code", None)
     data["updated_at"] = datetime.now().isoformat()
+    db = database.get_db()
     try:
-        update("warehouses", "code", code, data)
+        sets = ",".join(f"{k}=?" for k in data.keys())
+        db.execute(f"UPDATE warehouses SET {sets} WHERE code=?", list(data.values()) + [code])
+        # 主表联动: 仓库设置变更 → 同步用户账号 & 花名册
+        _cascade_warehouse_to_users(code, data, db)
+        _cascade_warehouse_to_employees(code, data, db)
+        db.commit()
     except Exception as e:
+        db.rollback()
         raise HTTPException(500, f"更新仓库失败: {str(e)}")
+    finally:
+        db.close()
     audit_log(user.get("username", ""), "update", "warehouses", code, json.dumps(list(data.keys())))
     return {"ok": True}
 
@@ -1868,7 +1948,21 @@ def get_lb(employee_id: Optional[str] = None, user=Depends(get_user)):
     return q("leave_balances", order="employee_id ASC")
 
 @app.get("/api/leave-requests")
-def get_lr(user=Depends(get_user)): return q("leave_requests")
+def get_lr(user=Depends(get_user)):
+    """获取请假申请 - 根据职级、部门、仓库做权限过滤"""
+    role = user.get("role", "worker")
+    if role == "sup" and user.get("supplier_id"):
+        return q("leave_requests", "employee_id IN (SELECT id FROM employees WHERE supplier_id=?)",
+                 (user["supplier_id"],))
+    emp_ids, scope = _get_scoped_employee_ids(user)
+    if scope == "all":
+        return q("leave_requests")
+    if emp_ids is not None and len(emp_ids) == 0:
+        return []
+    if emp_ids is not None:
+        placeholders = ",".join(["?"] * len(emp_ids))
+        return q("leave_requests", f"employee_id IN ({placeholders})", tuple(emp_ids))
+    return q("leave_requests")
 
 @app.post("/api/leave-requests")
 async def create_lr(request: Request, user=Depends(get_user)):
@@ -1910,7 +2004,21 @@ async def update_lr(lid: str, request: Request, user=Depends(get_user)):
 
 # ── Expenses ──
 @app.get("/api/expenses")
-def get_expenses(user=Depends(get_user)): return q("expense_claims")
+def get_expenses(user=Depends(get_user)):
+    """获取报销申请 - 根据职级、部门、仓库做权限过滤"""
+    role = user.get("role", "worker")
+    if role == "sup" and user.get("supplier_id"):
+        return q("expense_claims", "employee_id IN (SELECT id FROM employees WHERE supplier_id=?)",
+                 (user["supplier_id"],))
+    emp_ids, scope = _get_scoped_employee_ids(user)
+    if scope == "all":
+        return q("expense_claims")
+    if emp_ids is not None and len(emp_ids) == 0:
+        return []
+    if emp_ids is not None:
+        placeholders = ",".join(["?"] * len(emp_ids))
+        return q("expense_claims", f"employee_id IN ({placeholders})", tuple(emp_ids))
+    return q("expense_claims")
 
 @app.post("/api/expenses")
 async def create_expense(request: Request, user=Depends(get_user)):
@@ -2194,6 +2302,63 @@ def _get_employee_warehouse(user: dict) -> str:
     try:
         emp = db.execute("SELECT primary_wh FROM employees WHERE id=?", (eid,)).fetchone()
         return emp["primary_wh"] if emp else user.get("warehouse_code", "")
+    finally:
+        db.close()
+
+def _get_employee_department(user: dict) -> str:
+    """Get the department of the employee associated with a user."""
+    eid = user.get("employee_id")
+    if not eid:
+        return ""
+    db = database.get_db()
+    try:
+        emp = db.execute("SELECT department FROM employees WHERE id=?", (eid,)).fetchone()
+        return emp["department"] if emp and emp["department"] else ""
+    finally:
+        db.close()
+
+def _get_scoped_employee_ids(user: dict) -> tuple:
+    """Get employee IDs visible to the current user based on grade+department+warehouse scope.
+    Returns (list_of_employee_ids, scope_type) where scope_type helps callers decide filtering.
+    根据职级、部门、仓库做权限过滤"""
+    role = user.get("role", "worker")
+    scope = _check_grade_data_scope(user)
+    if scope == "all":
+        return None, "all"
+    if scope == "own_supplier" and user.get("supplier_id"):
+        return None, "own_supplier"  # caller should filter by supplier_id
+    if scope == "self_only":
+        eid = user.get("employee_id", "")
+        return [eid] if eid else [], "self_only"
+    # For own_warehouse and regional: get employees by warehouse, further filter by department for non-mgr roles
+    wh = _get_employee_warehouse(user)
+    if scope == "regional":
+        region_whs = _get_region_warehouses(wh) if wh else []
+        if not region_whs:
+            eid = user.get("employee_id", "")
+            return [eid] if eid else [], "self_only"
+        db = database.get_db()
+        try:
+            placeholders = ",".join(["?"] * len(region_whs))
+            rows = db.execute(f"SELECT id FROM employees WHERE primary_wh IN ({placeholders})",
+                              tuple(region_whs)).fetchall()
+            return [r["id"] for r in rows], "regional"
+        finally:
+            db.close()
+    # own_warehouse scope: filter by warehouse + department
+    if not wh:
+        eid = user.get("employee_id", "")
+        return [eid] if eid else [], "self_only"
+    dept = _get_employee_department(user)
+    db = database.get_db()
+    try:
+        if dept and role in ("team_leader", "shift_leader", "worker"):
+            # 部门权限: Team leaders and below see only their own department within the warehouse
+            rows = db.execute("SELECT id FROM employees WHERE primary_wh=? AND department=?",
+                              (wh, dept)).fetchall()
+        else:
+            rows = db.execute("SELECT id FROM employees WHERE primary_wh=?", (wh,)).fetchall()
+        return [r["id"] for r in rows], "own_warehouse"
     finally:
         db.close()
 

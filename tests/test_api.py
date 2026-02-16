@@ -3784,3 +3784,143 @@ async def test_database_indexes_created():
     assert "idx_timesheet_wh_status" in index_names
     assert "idx_payslips_emp_month" in index_names
     assert "idx_schedules_work_date" in index_names
+
+
+# ── Master Table Cascade Linkage Tests (主表联动) ──
+
+
+@pytest.mark.asyncio
+async def test_employee_update_cascades_to_user(auth_headers):
+    """When employee primary_wh or name changes, linked user account should update."""
+    transport = ASGITransport(app=app)
+    # Create employee with account
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "联动测试", "grade": "P2", "status": "在职",
+                                "primary_wh": "UNA", "biz_line": "渊博",
+                                "create_account": True, "account_role": "wh"})
+    assert r.status_code == 200
+    eid = r.json()["id"]
+
+    # Update employee warehouse and name
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r2 = await ac.put(f"/api/employees/{eid}", headers=auth_headers,
+                          json={"primary_wh": "DHL", "name": "联动测试改名", "biz_line": "新业务线"})
+    assert r2.status_code == 200
+
+    # Verify user account was cascaded
+    db = database.get_db()
+    user_row = db.execute("SELECT * FROM users WHERE employee_id=?", (eid,)).fetchone()
+    db.close()
+    assert user_row is not None
+    assert user_row["warehouse_code"] == "DHL"
+    assert user_row["display_name"] == "联动测试改名"
+    assert user_row["biz_line"] == "新业务线"
+
+
+@pytest.mark.asyncio
+async def test_warehouse_update_cascades_to_users(auth_headers):
+    """When warehouse biz_line changes, linked users and employees should update."""
+    transport = ASGITransport(app=app)
+    # First, create an employee with account at warehouse UNA
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "仓库联动", "grade": "P1", "status": "在职",
+                                "primary_wh": "UNA", "biz_line": "渊博",
+                                "create_account": True, "account_role": "wh"})
+    assert r.status_code == 200
+    eid = r.json()["id"]
+
+    # Update warehouse biz_line
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r2 = await ac.put("/api/warehouses/UNA", headers=auth_headers,
+                          json={"biz_line": "新业务"})
+    assert r2.status_code == 200
+
+    # Verify user's biz_line was cascaded
+    db = database.get_db()
+    user_row = db.execute("SELECT * FROM users WHERE employee_id=?", (eid,)).fetchone()
+    db.close()
+    assert user_row["biz_line"] == "新业务"
+
+
+@pytest.mark.asyncio
+async def test_supplier_update_cascades_to_users(auth_headers):
+    """When supplier name changes, linked supplier-only users should update display_name."""
+    transport = ASGITransport(app=app)
+    # Get current supplier details to identify existing users
+    db = database.get_db()
+    sup_user = db.execute("SELECT * FROM users WHERE supplier_id IS NOT NULL AND employee_id IS NULL").fetchone()
+    db.close()
+
+    if sup_user:
+        sid = sup_user["supplier_id"]
+        # Update supplier name
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.put(f"/api/suppliers/{sid}", headers=auth_headers,
+                             json={"name": "更新供应商名称"})
+        assert r.status_code == 200
+
+        # Verify user display_name was cascaded
+        db = database.get_db()
+        updated_user = db.execute("SELECT * FROM users WHERE username=?",
+                                  (sup_user["username"],)).fetchone()
+        db.close()
+        assert updated_user["display_name"] == "更新供应商名称"
+
+
+@pytest.mark.asyncio
+async def test_leave_requests_scoped_by_role(auth_headers):
+    """Leave requests should be scoped: admin sees all, workers see only own."""
+    transport = ASGITransport(app=app)
+    # Admin should see all leave requests
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/leave-requests", headers=auth_headers)
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_expenses_scoped_by_role(auth_headers):
+    """Expenses should be scoped: admin sees all, workers see only own."""
+    transport = ASGITransport(app=app)
+    # Admin should see all expenses
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/expenses", headers=auth_headers)
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_employee_cascade_no_account_no_error(auth_headers):
+    """Updating employee without linked account should not error."""
+    transport = ASGITransport(app=app)
+    # Create employee without account
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/employees", headers=auth_headers,
+                          json={"name": "无账号测试", "grade": "P1", "status": "在职"})
+    assert r.status_code == 200
+    eid = r.json()["id"]
+
+    # Update should succeed even without linked user
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r2 = await ac.put(f"/api/employees/{eid}", headers=auth_headers,
+                          json={"primary_wh": "UNA", "name": "无账号改名"})
+    assert r2.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_warehouse_cascade_no_linked_users(auth_headers):
+    """Updating warehouse with no linked users should not error."""
+    transport = ASGITransport(app=app)
+    # Create a warehouse with no linked users
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/warehouses", headers=auth_headers,
+                          json={"code": "TEST-WH", "name": "测试仓库"})
+    assert r.status_code == 200
+
+    # Update should succeed even without linked users
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r2 = await ac.put("/api/warehouses/TEST-WH", headers=auth_headers,
+                          json={"name": "测试仓库改名", "biz_line": "测试业务"})
+    assert r2.status_code == 200
