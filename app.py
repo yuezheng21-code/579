@@ -512,6 +512,9 @@ async def create_employee(request: Request, user=Depends(get_user)):
 @app.put("/api/employees/{eid}")
 async def update_employee(eid: str, request: Request, user=Depends(get_user)):
     data = await request.json(); data["updated_at"] = datetime.now().isoformat()
+    # Strip virtual/JOINed fields that are not actual columns in employees table
+    for vf in ("supplier_name", "warehouse_name", "grade_title"):
+        data.pop(vf, None)
     role = user.get("role", "worker")
     data = _enforce_editable_fields(data, role, "employees")
     if not data:

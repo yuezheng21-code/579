@@ -399,6 +399,30 @@ async def test_update_employee(auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_update_employee_with_joined_fields(auth_headers):
+    """Updating employee with the full object from GET (including JOINed fields) should succeed."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Get employee list (returns JOINed fields like supplier_name, warehouse_name, grade_title)
+        r = await ac.get("/api/employees", headers=auth_headers)
+        employees = r.json()
+        assert len(employees) > 0
+        emp = employees[0]
+        eid = emp["id"]
+
+        # Send the full object back (mimicking the frontend edit flow)
+        emp["phone"] = "updated-phone-123"
+        r = await ac.put(f"/api/employees/{eid}", headers=auth_headers, json=emp)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        # Verify the update actually persisted
+        r2 = await ac.get(f"/api/employees/{eid}", headers=auth_headers)
+        assert r2.status_code == 200
+        assert r2.json()["phone"] == "updated-phone-123"
+
+
+@pytest.mark.asyncio
 async def test_audit_logging(auth_headers):
     """Test that create operations produce audit log entries."""
     transport = ASGITransport(app=app)
