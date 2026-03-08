@@ -4563,12 +4563,13 @@ async def test_client_data_scope():
     """Client role should have self_only data scope."""
     db = database.get_db()
     rows = db.execute(
-        "SELECT data_scope FROM permission_overrides WHERE role='client'"
+        "SELECT module, data_scope FROM permission_overrides WHERE role='client'"
     ).fetchall()
     db.close()
-    assert len(rows) > 0
+    # Client should have permission rows for all modules in ALL_M
+    assert len(rows) >= 27  # ALL_M has 27 modules
     for r in rows:
-        assert r["data_scope"] == "self_only"
+        assert r["data_scope"] == "self_only", f"client module {r['module']} has scope {r['data_scope']}"
 
 
 @pytest.mark.asyncio
@@ -4576,12 +4577,13 @@ async def test_jobseeker_data_scope():
     """Jobseeker role should have self_only data scope."""
     db = database.get_db()
     rows = db.execute(
-        "SELECT data_scope FROM permission_overrides WHERE role='jobseeker'"
+        "SELECT module, data_scope FROM permission_overrides WHERE role='jobseeker'"
     ).fetchall()
     db.close()
-    assert len(rows) > 0
+    # Jobseeker should have permission rows for all modules in ALL_M
+    assert len(rows) >= 27  # ALL_M has 27 modules
     for r in rows:
-        assert r["data_scope"] == "self_only"
+        assert r["data_scope"] == "self_only", f"jobseeker module {r['module']} has scope {r['data_scope']}"
 
 
 @pytest.mark.asyncio
