@@ -2008,7 +2008,7 @@ def download_single_file(file_id: str, user=Depends(get_user)):
     f = dict(f)
     if not _can_access_employee_files(user, f["employee_id"]):
         raise HTTPException(403, "无权下载该文件")
-    file_url = f.get("file_url", "")
+    file_url = f.get("file_url") or ""
     if file_url.startswith("/uploads/"):
         file_path = os.path.join(UPLOAD_DIR, file_url.replace("/uploads/", "", 1))
         if os.path.isfile(file_path):
@@ -2034,7 +2034,7 @@ def download_employee_folder(employee_id: str, user=Depends(get_user)):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in files:
             f = dict(f)
-            file_url = f.get("file_url", "")
+            file_url = f.get("file_url") or ""
             if file_url.startswith("/uploads/"):
                 file_path = os.path.join(UPLOAD_DIR, file_url.replace("/uploads/", "", 1))
                 if os.path.isfile(file_path):
@@ -3754,12 +3754,13 @@ async def delete_record(table: str, record_id: str, user=Depends(get_user)):
 
 # ── File Upload ──
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...), category: str = Form("general")):
+async def upload_file(file: UploadFile = File(...), category: str = Form("general"), user=Depends(get_user)):
     ext = os.path.splitext(file.filename)[1]
     fname = f"{category}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{ext}"
     path = os.path.join(UPLOAD_DIR, fname)
     content = await file.read()
     with open(path, "wb") as f: f.write(content)
+    audit_log(user.get("username", ""), "upload", "file", fname, f"文件: {file.filename}, 大小: {len(content)}")
     return {"filename": fname, "url": f"/uploads/{fname}", "size": len(content)}
 
 # ── Payslips - 工资条 ──

@@ -4374,3 +4374,88 @@ async def test_upgrade_preserves_data_without_db_reset():
     ts_count = db.execute("SELECT COUNT(*) FROM timesheet").fetchone()[0]
     assert ts_count > 0
     db.close()
+
+
+# ── Tests for file upload, download, and admin.html serving ──
+
+@pytest.mark.asyncio
+async def test_file_upload_requires_auth():
+    """Test that file upload requires authentication."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/upload", files={"file": ("test.txt", b"hello", "text/plain")}, data={"category": "general"})
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_file_upload_and_download(auth_headers):
+    """Test complete upload -> create metadata -> download flow."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # 1. Upload a real file
+        r = await ac.post("/api/upload",
+                          files={"file": ("test_doc.txt", b"test content for upload", "text/plain")},
+                          data={"category": "其他"},
+                          headers={"Authorization": auth_headers["Authorization"]})
+        assert r.status_code == 200
+        upload_data = r.json()
+        assert "url" in upload_data
+        assert upload_data["url"].startswith("/uploads/")
+        assert upload_data["size"] == len(b"test content for upload")
+
+        # 2. Get an employee ID
+        r = await ac.get("/api/employees", headers=auth_headers)
+        assert r.status_code == 200
+        emp_id = r.json()[0]["id"]
+
+        # 3. Create file metadata record
+        r = await ac.post("/api/files", json={
+            "employee_id": emp_id,
+            "file_name": "test_doc.txt",
+            "file_url": upload_data["url"],
+            "file_type": "text/plain",
+            "file_size": upload_data["size"],
+            "category": "其他",
+            "stage": "在职"
+        }, headers=auth_headers)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        # 4. List files and find the one we just created
+        r = await ac.get(f"/api/files?employee_id={emp_id}", headers=auth_headers)
+        assert r.status_code == 200
+        files = r.json()
+        uploaded_file = [f for f in files if f["file_name"] == "test_doc.txt"]
+        assert len(uploaded_file) == 1
+        file_id = uploaded_file[0]["id"]
+
+        # 5. Download the file
+        r = await ac.get(f"/api/files/{file_id}/download", headers=auth_headers)
+        assert r.status_code == 200
+        assert r.content == b"test content for upload"
+
+
+@pytest.mark.asyncio
+async def test_file_download_virtual_file_returns_404(auth_headers):
+    """Test that downloading a seeded file with None URL returns 404 (not 500)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # The seeded files have file_url=None, download should return 404
+        r = await ac.get("/api/files", headers=auth_headers)
+        files = r.json()
+        if files:
+            # Find a file with no real file_url
+            virtual_file = [f for f in files if not f.get("file_url") or not str(f.get("file_url", "")).startswith("/uploads/")]
+            if virtual_file:
+                r = await ac.get(f"/api/files/{virtual_file[0]['id']}/download", headers=auth_headers)
+                assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_admin_html_served():
+    """Test that admin.html is served at /admin.html."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/admin.html")
+    assert r.status_code == 200
+    assert "管理后台" in r.text

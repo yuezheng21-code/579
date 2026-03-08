@@ -773,7 +773,7 @@ const EmpPage=({t,gFilterWh,gFilterSup,gFilterDept,masterWhs,masterSups,refreshM
     setShowEdit(null);API.get('/api/employees').then(setEmps);if(refreshMaster)refreshMaster();
   };
   const doExport=async()=>{const r=await API.get('/api/export/employees');if(r&&r.data){const blob=new Blob([JSON.stringify(r.data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='employees.json';a.click();showToast('导出成功');}};
-  const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.csv,.xlsx,.xls,.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const ext=f.name.split('.').pop().toLowerCase();if(ext==='json'){const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/employees',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}}else{const form=new FormData();form.append('file',f);try{const resp=await fetch('/api/import-file/employees',{method:'POST',headers:{'Authorization':'Bearer '+localStorage.getItem('token')},body:form});const r=await resp.json();if(r.ok)showToast(`导入完成: ${r.success||0} 条成功, ${(r.errors||[]).length} 条失败`);else showToast('导入失败: '+(r.detail||'未知错误'),'error');API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}}};inp.click();};
+  const doImport=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='.csv,.xlsx,.xls,.json';inp.onchange=async e=>{const f=e.target.files[0];if(!f)return;const ext=f.name.split('.').pop().toLowerCase();if(ext==='json'){const text=await f.text();try{const data=JSON.parse(text);const arr=Array.isArray(data)?data:data.data||[];const r=await API.post('/api/import/employees',{data:arr});showToast(`导入完成: ${r.success||0} 条成功`);API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}}else{const form=new FormData();form.append('file',f);try{const resp=await fetch('/api/import-file/employees',{method:'POST',headers:{'Authorization':'Bearer '+localStorage.getItem('hr_token')},body:form});const r=await resp.json();if(r.ok)showToast(`导入完成: ${r.success||0} 条成功, ${(r.errors||[]).length} 条失败`);else showToast('导入失败: '+(r.detail||'未知错误'),'error');API.get('/api/employees').then(setEmps);}catch(err){showToast('导入失败: '+err.message,'error');}}};inp.click();};
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar'},
       React.createElement('input',{value:q,onChange:e=>setQ(e.target.value),placeholder:'🔍 搜索姓名/工号/职级...'}),
@@ -1188,7 +1188,7 @@ const QuotePage=({t})=>{
     if(!selIds.length){showToast('请先选择报价记录');return;}
     setPdfLoading(true);
     try{
-      const token=localStorage.getItem('token');
+      const token=localStorage.getItem('hr_token');
       const resp=await fetch('/api/quotation-pdf',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({ids:selIds})});
       if(!resp.ok){const err=await resp.json().catch(()=>({}));showToast(err.detail||'生成PDF失败');return;}
       const blob=await resp.blob();
@@ -1234,14 +1234,52 @@ const QuotePage=({t})=>{
 };
 
 // ══════ Files ══════
-const FilePage=({t})=>{
+const FilePage=({t,user})=>{
   const[files,setF]=useState([]);const[emps,setE]=useState([]);const[selEmp,setSel]=useState('');
-  useEffect(()=>{API.get('/api/files').then(setF);API.get('/api/employees').then(setE);},[]);
+  const[uploading,setUploading]=useState(false);const[uploadEmp,setUploadEmp]=useState('');const[uploadCat,setUploadCat]=useState('身份证件');
+  const fileInputRef=React.useRef(null);
+  const reload=()=>{API.get('/api/files').then(r=>setF(r||[]));};
+  useEffect(()=>{reload();API.get('/api/employees').then(setE);},[]);
   const empNames=Object.fromEntries(emps.map(e=>[e.id,e.name]));
   const grouped=files.reduce((a,f)=>{(a[f.employee_id]=a[f.employee_id]||[]).push(f);return a;},{});
-  const downloadFile=(fileId,fileName)=>{const a=document.createElement('a');a.href=`/api/files/${fileId}/download`;a.download=fileName||'download';a.style.display='none';const token=localStorage.getItem('token');fetch(`/api/files/${fileId}/download`,{headers:{'Authorization':'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('下载失败');return r.blob();}).then(blob=>{const url=URL.createObjectURL(blob);a.href=url;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);}).catch(e=>showToast(e.message,'error'));};
-  const downloadFolder=(eid)=>{const token=localStorage.getItem('token');fetch(`/api/files/download-folder/${eid}`,{headers:{'Authorization':'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('下载失败');return r.blob();}).then(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${empNames[eid]||eid}_files.zip`;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);}).catch(e=>showToast(e.message,'error'));};
+  const downloadFile=(fileId,fileName)=>{const token=localStorage.getItem('hr_token');fetch(`/api/files/${fileId}/download`,{headers:{'Authorization':'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('下载失败');return r.blob();}).then(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=fileName||'download';a.style.display='none';document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);}).catch(e=>showToast(e.message,'error'));};
+  const downloadFolder=(eid)=>{const token=localStorage.getItem('hr_token');fetch(`/api/files/download-folder/${eid}`,{headers:{'Authorization':'Bearer '+token}}).then(r=>{if(!r.ok)throw new Error('下载失败');return r.blob();}).then(blob=>{const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`${empNames[eid]||eid}_files.zip`;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);}).catch(e=>showToast(e.message,'error'));};
+  const handleUpload=async()=>{
+    const fileEl=fileInputRef.current;if(!fileEl||!fileEl.files.length){showToast('请选择文件','error');return;}
+    if(!uploadEmp){showToast('请选择员工','error');return;}
+    setUploading(true);
+    try{
+      const file=fileEl.files[0];const form=new FormData();form.append('file',file);form.append('category',uploadCat);
+      const token=localStorage.getItem('hr_token');
+      const resp=await fetch('/api/upload',{method:'POST',headers:{'Authorization':'Bearer '+token},body:form});
+      if(!resp.ok){const err=await resp.json().catch(()=>({}));throw new Error(err.detail||'上传失败');}
+      const result=await resp.json();
+      await API.post('/api/files',{employee_id:uploadEmp,file_name:file.name,file_url:result.url,file_type:file.type,file_size:result.size,category:uploadCat,stage:'在职'});
+      showToast('文件上传成功');fileEl.value='';reload();
+    }catch(e){showToast(e.message||'上传失败','error');}
+    setUploading(false);
+  };
   return React.createElement('div',{className:'fade'},
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{style:{fontWeight:700,marginBottom:10}},'📤 上传文件'),
+      React.createElement('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'flex-end'}},
+        React.createElement('div',{className:'form-field',style:{minWidth:160}},
+          React.createElement('label',null,'选择员工'),
+          React.createElement('select',{value:uploadEmp,onChange:e=>setUploadEmp(e.target.value),
+            style:{width:'100%',padding:'7px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:13}},
+            React.createElement('option',{value:''},'-- 选择员工 --'),
+            emps.map(e=>React.createElement('option',{key:e.id,value:e.id},`${e.id} ${e.name}`)))),
+        React.createElement('div',{className:'form-field',style:{minWidth:120}},
+          React.createElement('label',null,'文件类别'),
+          React.createElement('select',{value:uploadCat,onChange:e=>setUploadCat(e.target.value),
+            style:{width:'100%',padding:'7px 10px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:13}},
+            ['身份证件','合同','简历','证书','体检报告','其他'].map(c=>React.createElement('option',{key:c,value:c},c)))),
+        React.createElement('div',{className:'form-field',style:{minWidth:200}},
+          React.createElement('label',null,'选择文件'),
+          React.createElement('input',{ref:fileInputRef,type:'file',
+            style:{width:'100%',padding:'5px 0',fontSize:13,color:'var(--text)'}})),
+        React.createElement('button',{className:'btn btn-pri',onClick:handleUpload,disabled:uploading,style:{height:34}},
+          uploading?'上传中...':'📤 上传'))),
     React.createElement('div',{className:'search-bar'},
       React.createElement('select',{value:selEmp,onChange:e=>setSel(e.target.value),
         style:{padding:'7px 12px',background:'var(--bg)',border:'1px solid var(--border)',borderRadius:6,color:'var(--text)',fontSize:13}},
@@ -1256,7 +1294,8 @@ const FilePage=({t})=>{
           fs.map(f=>React.createElement('div',{key:f.id,style:{background:'var(--bg)',padding:'8px 12px',borderRadius:6,fontSize:12,border:'1px solid var(--border)'}},
             React.createElement('div',null,f.confidential?'🔒':'📄',' ',f.file_name),
             React.createElement('div',{style:{color:'var(--text3)',marginTop:2}},`${f.category} · ${f.stage} · ${f.upload_date}`),
-            React.createElement('button',{style:{marginTop:4,fontSize:11,color:'var(--blue)',background:'none',border:'none',cursor:'pointer',padding:0},onClick:()=>downloadFile(f.id,f.file_name)},'⬇ 下载')))))));
+            React.createElement('button',{style:{marginTop:4,fontSize:11,color:'var(--pri)',background:'none',border:'none',cursor:'pointer',padding:0},onClick:()=>downloadFile(f.id,f.file_name)},'⬇ 下载')))))),
+    (!files.length)&&React.createElement('div',{className:'empty'},'暂无文件记录'));
 };
 
 // ══════ Warehouse Management ══════
@@ -1740,7 +1779,7 @@ const ContainerPage=({t})=>{
   };
   const handleExport=async(fmt)=>{
     if(fmt==='json'){const d=await API.get('/api/export/container_records');const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='container_records.json';a.click();}
-    else{window.open(`/api/export/container_records?fmt=${fmt}&token=${localStorage.getItem('token')}`,'_blank');}
+    else{window.open(`/api/export/container_records?fmt=${fmt}&token=${localStorage.getItem('hr_token')}`,'_blank');}
   };
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar',style:{display:'flex',gap:8,flexWrap:'wrap'}},
@@ -1835,7 +1874,7 @@ const SchedulePage=({t,gFilterWh,gFilterSup,gFilterDept})=>{
   };
   const handleExport=async(fmt)=>{
     if(fmt==='json'){const d=await API.get('/api/export/schedules');const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='schedules.json';a.click();}
-    else{window.open(`/api/export/schedules?fmt=${fmt}&token=${localStorage.getItem('token')}`,'_blank');}
+    else{window.open(`/api/export/schedules?fmt=${fmt}&token=${localStorage.getItem('hr_token')}`,'_blank');}
   };
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar',style:{display:'flex',gap:8,flexWrap:'wrap'}},
@@ -1916,7 +1955,7 @@ const DispatchPage=({t})=>{
   };
   const handleExport=async(fmt)=>{
     if(fmt==='json'){const d=await API.get('/api/export/dispatch_needs');const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='dispatch_needs.json';a.click();}
-    else{window.open(`/api/export/dispatch_needs?fmt=${fmt}&token=${localStorage.getItem('token')}`,'_blank');}
+    else{window.open(`/api/export/dispatch_needs?fmt=${fmt}&token=${localStorage.getItem('hr_token')}`,'_blank');}
   };
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar',style:{display:'flex',gap:8,flexWrap:'wrap'}},
@@ -1999,7 +2038,7 @@ const RecruitPage=({t})=>{
   };
   const handleExport=async(fmt)=>{
     if(fmt==='json'){const d=await API.get('/api/export/recruit_progress');const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='recruit_progress.json';a.click();}
-    else{window.open(`/api/export/recruit_progress?fmt=${fmt}&token=${localStorage.getItem('token')}`,'_blank');}
+    else{window.open(`/api/export/recruit_progress?fmt=${fmt}&token=${localStorage.getItem('hr_token')}`,'_blank');}
   };
   return React.createElement('div',{className:'fade'},
     React.createElement('div',{className:'search-bar',style:{display:'flex',gap:8,flexWrap:'wrap'}},
@@ -2601,6 +2640,10 @@ const App=()=>{
             onClick:()=>{setPage(i.key);setSide(false)}},i.icon,' ',t[i.key]||i.label)));
       }),
       React.createElement('div',{style:{padding:12,borderTop:'1px solid var(--border)',marginTop:'auto'}},
+        user.role==='admin'&&React.createElement('a',{href:'/admin.html',
+          style:{display:'block',width:'100%',padding:'8px 0',marginBottom:8,textAlign:'center',
+            background:'linear-gradient(135deg,var(--pri),var(--pri2))',color:'#fff',borderRadius:6,
+            fontSize:12,fontWeight:600,textDecoration:'none',cursor:'pointer'}},'⚙️ 管理后台'),
         React.createElement('div',{style:{display:'flex',gap:4,marginBottom:8}},
           LANGS.map(l=>React.createElement('span',{key:l.c,onClick:()=>setLang(l.c),
             style:{cursor:'pointer',padding:'2px 6px',borderRadius:4,fontSize:11,
