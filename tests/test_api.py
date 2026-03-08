@@ -4260,3 +4260,117 @@ async def test_set_password_non_admin_forbidden():
         r = await ac.post("/api/accounts/admin/set-password",
                           headers=headers, json={"password": "newpass123"})
     assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_seed_data_preserves_existing_employees():
+    """seed_data() should NOT overwrite existing employees when the employees table has data."""
+    # Add a new employee
+    db = database.get_db()
+    db.execute("INSERT INTO employees(id, name, status) VALUES('CUSTOM-001', '新入职员工', '在职')")
+    db.commit()
+    orig_count = db.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+    db.close()
+
+    # Re-run seed_data (simulates upgrade)
+    database.seed_data()
+
+    # Verify the custom employee is preserved and count is unchanged
+    db = database.get_db()
+    new_count = db.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+    custom = db.execute("SELECT name FROM employees WHERE id='CUSTOM-001'").fetchone()
+    db.close()
+    assert new_count == orig_count
+    assert custom is not None
+    assert custom["name"] == "新入职员工"
+
+
+@pytest.mark.asyncio
+async def test_seed_data_preserves_existing_timesheet():
+    """seed_data() should NOT overwrite existing timesheet records."""
+    db = database.get_db()
+    orig_count = db.execute("SELECT COUNT(*) FROM timesheet").fetchone()[0]
+    db.close()
+    assert orig_count > 0
+
+    # Re-run seed_data (simulates upgrade)
+    database.seed_data()
+
+    db = database.get_db()
+    new_count = db.execute("SELECT COUNT(*) FROM timesheet").fetchone()[0]
+    db.close()
+    assert new_count == orig_count
+
+
+@pytest.mark.asyncio
+async def test_ensure_demo_users_preserves_passwords():
+    """ensure_demo_users() should NOT reset passwords of existing users."""
+    # Change admin password
+    db = database.get_db()
+    db.execute("UPDATE users SET password_hash='custom_pw_hash_999' WHERE username='admin'")
+    db.commit()
+    db.close()
+
+    # Re-run ensure_demo_users (simulates upgrade)
+    database.ensure_demo_users()
+
+    # Verify password is preserved
+    db = database.get_db()
+    pw = db.execute("SELECT password_hash FROM users WHERE username='admin'").fetchone()["password_hash"]
+    db.close()
+    assert pw == "custom_pw_hash_999"
+
+
+@pytest.mark.asyncio
+async def test_seed_data_preserves_existing_users():
+    """seed_data() should NOT overwrite existing user accounts."""
+    db = database.get_db()
+    orig_count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    db.close()
+    assert orig_count > 0
+
+    # Re-run seed_data (simulates upgrade)
+    database.seed_data()
+
+    db = database.get_db()
+    new_count = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    db.close()
+    assert new_count == orig_count
+
+
+@pytest.mark.asyncio
+async def test_upgrade_preserves_data_without_db_reset():
+    """Simulates a persistent-DB upgrade: init_db + seed_data + ensure_demo_users
+    should preserve new employees, timesheets, and user password changes."""
+    # 1. Add a new employee
+    db = database.get_db()
+    db.execute("INSERT INTO employees(id, name, phone, status) VALUES('UPG-001', '升级测试员工', '+49-999-TEST', '在职')")
+    db.commit()
+    db.close()
+
+    # 2. Change a user password
+    db = database.get_db()
+    db.execute("UPDATE users SET password_hash='upgrade_test_hash' WHERE username='hr'")
+    db.commit()
+    db.close()
+
+    # 3. Run full upgrade sequence (without deleting DB)
+    database.init_db()
+    database.seed_data()
+    database.ensure_demo_users()
+
+    # 4. Verify new employee is preserved
+    db = database.get_db()
+    emp = db.execute("SELECT name, phone FROM employees WHERE id='UPG-001'").fetchone()
+    assert emp is not None
+    assert emp["name"] == "升级测试员工"
+    assert emp["phone"] == "+49-999-TEST"
+
+    # 5. Verify user password is preserved
+    pw = db.execute("SELECT password_hash FROM users WHERE username='hr'").fetchone()["password_hash"]
+    assert pw == "upgrade_test_hash"
+
+    # 6. Verify timesheet data is preserved
+    ts_count = db.execute("SELECT COUNT(*) FROM timesheet").fetchone()[0]
+    assert ts_count > 0
+    db.close()

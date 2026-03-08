@@ -790,7 +790,11 @@ def verify_password(password, hashed):
     return hash_password(password) == hashed
 
 def ensure_demo_users():
-    """确保演示账号可用（用于部署后角色测试）"""
+    """确保演示账号可用（用于部署后角色测试）
+    Only creates demo users that don't already exist.
+    Does NOT overwrite existing users' passwords or other data,
+    so that user-modified credentials are preserved across upgrades.
+    """
     demo_users = [
         ("admin", "admin123", "系统管理员", "admin", None, None),
         ("ceo_wb", "ceo123", "王博(CEO)", "ceo", None, None),
@@ -807,24 +811,38 @@ def ensure_demo_users():
         c.execute(
             """INSERT INTO users(username,password_hash,display_name,role,supplier_id,warehouse_code,active)
                VALUES(?,?,?,?,?,?,1)
-               ON CONFLICT(username) DO UPDATE SET
-                   password_hash=excluded.password_hash,
-                   display_name=excluded.display_name,
-                   role=excluded.role,
-                   supplier_id=excluded.supplier_id,
-                   warehouse_code=excluded.warehouse_code,
-                   active=1""",
+               ON CONFLICT(username) DO NOTHING""",
             (username, hash_password(password), display_name, role, supplier_id, warehouse_code),
         )
     conn.commit(); conn.close()
 
 def seed_data():
+    """Seed initial/demo data into the database.
+    Each table category is checked independently so that existing user data
+    (e.g. new employees, timesheet records) is preserved across upgrades.
+    Only empty tables get seeded — tables with existing data are skipped.
+    """
     conn = get_db(); c = conn.cursor()
-    if c.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0:
-        conn.close(); return
 
-    # ── Grade Levels ──
-    grades_data = [
+    # Whitelist of tables that may be checked during seeding
+    _SEED_TABLES = frozenset([
+        "grade_levels", "leave_types", "quotation_templates", "users",
+        "permission_overrides", "warehouses", "warehouse_salary_config",
+        "suppliers", "employees",
+    ])
+
+    def _table_empty(table_name):
+        """Return True if the given table has zero rows."""
+        if table_name not in _SEED_TABLES:
+            return True
+        try:
+            return c.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0] == 0
+        except Exception:
+            return True  # Table may not exist yet
+
+    # ── Grade Levels (only seed if empty) ──
+    if _table_empty("grade_levels"):
+      grades_data = [
         ("P0","运营",0,"供应商工人","Supplier Worker","Leiharbeiter",11.0,"个人","0",
          '["完成基础任务","遵守安全规定","出勤率≥90%"]',"P1(转正)","[]",0,0),
         ("P1","运营",1,"新人操作员","Junior Operator","Nachwuchsbediener",11.5,"个人","0",
@@ -859,26 +877,28 @@ def seed_data():
         ("M3","行政",3,"行政主管","Admin Supv","Verwaltungsleiter",17.0,"2-5人","2-5",'["管理团队","制度建设","预算管理"]',"M4","[]",5,12),
         ("M4","行政",4,"行政经理","Admin Mgr","Verwaltungsmanager",22.0,"部门","5-15",'["部门管理","战略支持","流程优化"]',"M5","[]",5,15),
         ("M5","行政",5,"行政总监","Admin Dir","Verwaltungsdirektor",30.0,"全公司","全部",'["体系建设","治理支持","重大项目"]',"",'[]',5,20),
-    ]
-    for g in grades_data:
+      ]
+      for g in grades_data:
         c.execute("""INSERT INTO grade_levels(code,series,level,title_zh,title_en,title_de,
             base_salary,manage_scope,headcount_range,eval_criteria,promotion_path,perf_dimensions,
             adjust_pct_min,adjust_pct_max) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(code) DO NOTHING""", g)
 
-    # ── Leave Types ──
-    for lt in [
+    # ── Leave Types (only seed if empty) ──
+    if _table_empty("leave_types"):
+      for lt in [
         ("annual","年假","Annual Leave","Jahresurlaub",1,20,0,"",30,3,"德国法定20天"),
         ("sick","病假","Sick Leave","Krankheit",1,30,1,"AU医生证明",0,0,"第4天起需AU"),
         ("personal","事假","Personal Leave","Sonderurlaub",0,5,0,"",5,1,"无薪事假"),
         ("maternity","产假","Maternity","Mutterschutz",1,98,1,"医院证明",0,0,"产前6周+产后8周"),
         ("marriage","婚假","Marriage","Hochzeitsurlaub",1,3,1,"结婚证明",3,14,""),
         ("bereavement","丧假","Bereavement","Trauerurlaub",1,3,0,"",3,1,"直系亲属"),
-    ]:
+      ]:
         c.execute("INSERT INTO leave_types VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING", lt)
 
-    # ── Quotation Templates ──
-    for q in [
+    # ── Quotation Templates (only seed if empty) ──
+    if _table_empty("quotation_templates"):
+      for q in [
         ("QT-001","人力派遣","普通仓内","仓内操作工派遣","标准拣货/打包/上架",14.50,"€/h",
          '[{"min":1,"max":5,"p":14.50},{"min":6,"max":20,"p":13.80},{"min":21,"max":50,"p":13.20},{"min":51,"max":999,"p":12.80}]',
          2.0,3.0,5.0,'[{"s":"叉车","p":1.5},{"s":"德语B2","p":1.0}]',4,"2026-01-01","2026-12-31",
@@ -898,14 +918,15 @@ def seed_data():
          '[{"min":1,"max":10,"p":13.0},{"min":11,"max":30,"p":12.5},{"min":31,"max":999,"p":12.0}]',
          1.5,2.5,4.0,'[]',4,"2026-01-01","2026-12-31",
          '[{"g":"P4","min":-2,"max":2},{"g":"P7","min":-5,"max":5},{"g":"P9","min":-8,"max":8}]'),
-    ]:
+      ]:
         c.execute("""INSERT INTO quotation_templates(id,biz_type,service_type,name,description,
             base_price,unit,volume_tiers,night_surcharge,weekend_surcharge,holiday_surcharge,
             skill_surcharge,min_hours,valid_from,valid_to,adjust_rules) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO NOTHING""", q)
 
-    # ── Users ──
-    for u in [
+    # ── Users (only seed if empty — preserves user-created accounts) ──
+    if _table_empty("users"):
+      for u in [
         ("admin","admin123","系统管理员","admin"),
         ("ceo_wb","ceo123","王博(CEO)","ceo"),("ceo_yly","ceo123","袁梁毅(CEO)","ceo"),
         ("hr","hr123","赵慧(HR)","hr"),
@@ -927,11 +948,11 @@ def seed_data():
         ("fin_spec","finspec123","褚财专(财务专员)","fin_specialist"),
         ("adm_asst","admasst123","卫行助(行政助理)","admin_assistant"),
         ("adm_spec","admspec123","蒋行专(行政专员)","admin_specialist"),
-    ]:
+      ]:
         c.execute("INSERT INTO users(username,password_hash,display_name,role) VALUES(?,?,?,?)",
                   (u[0],hash_password(u[1]),u[2],u[3]))
 
-    # ── Permissions ──
+    # ── Permissions (uses ON CONFLICT DO NOTHING — safe to re-run) ──
     # Roles hierarchy: admin (god view) > ceo > ops_director > regional_mgr > site_mgr > deputy_mgr >
     #   shift_leader > team_leader > worker (operational chain)
     # Plus: fin_director > fin_assistant > fin_specialist (finance chain)
@@ -1146,17 +1167,19 @@ def seed_data():
                 ON CONFLICT(role, module) DO NOTHING""",
                 (role,mod,int(mod in v),int(mod in cr),int(mod in ed),int(mod in dl),int(mod in ex),int(mod in ap),int(mod in im),hf,"",scope))
 
-    # ── Warehouses (客户仓库 - 第三方劳务派遣) ──
-    # Regions: 南战区 (South), 鲁尔西 (Ruhr West), 鲁尔东 (Ruhr East)
-    for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,"鲁尔西",""),
-              ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","第三方派遣","dhl@example.com","","纯派遣","2025-03-01","2026-06-30",15,10,"鲁尔西",""),
-              ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","第三方派遣","579@example.com","","流程承包","2025-06-01","2026-12-31",20,12,"鲁尔东",""),
-              ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,"鲁尔东",""),
-              ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"南战区","")]:
+    # ── Warehouses (only seed if empty — preserves user-customized warehouses) ──
+    if _table_empty("warehouses"):
+      # Regions: 南战区 (South), 鲁尔西 (Ruhr West), 鲁尔东 (Ruhr East)
+      for w in [("UNA","UNA仓库","Köln","王磊","+49-176-1001","UNA Logistics","PRJ-UNA","渊博","按小时","",180,320,380,160,300,350,None,None,"Daily","de","","DE123456789","王磊","第三方派遣","una@example.com","","整仓承包","2025-01-01","2026-12-31",25,18,"鲁尔西",""),
+                ("DHL","DHL仓库","Düsseldorf","李娜","+49-176-1002","DHL SC","PRJ-DHL","渊博","按小时","",160,300,350,140,280,320,None,None,"Weekly","en","","DE987654321","李娜","第三方派遣","dhl@example.com","","纯派遣","2025-03-01","2026-06-30",15,10,"鲁尔西",""),
+                ("W579","579仓库","Duisburg","张伟","+49-176-1003","579 Express","PRJ-579","579","按小时","",150,280,330,130,260,300,None,None,"Monthly","zh","","DE111222333","张伟","第三方派遣","579@example.com","","流程承包","2025-06-01","2026-12-31",20,12,"鲁尔东",""),
+                ("CMA","CMA仓库","Essen","赵六","+49-176-1004","CMA CGM","PRJ-CMA","渊博","按柜","",170,310,360,150,290,340,None,None,"Monthly","en","","DE444555666","赵六","第三方派遣","cma@example.com","","区块承包","2025-04-01","2026-12-31",10,6,"鲁尔东",""),
+                ("EMR","Emmerich仓库","Emmerich","周七","+49-176-1005","Emmerich Log","PRJ-EMR","渊博","按件","",160,290,340,140,270,310,None,None,"Monthly","de","","DE777888999","周七","第三方派遣","emr@example.com","","纯派遣","2025-09-01","2026-12-31",8,5,"南战区","")]:
         c.execute("INSERT INTO warehouses VALUES("+",".join(["?"]*len(w))+")", w)
 
-    # ── NEW: Warehouse Salary Config ──
-    wh_salary_configs = [
+    # ── Warehouse Salary Config (uses ON CONFLICT DO NOTHING — safe to re-run) ──
+    if _table_empty("warehouse_salary_config"):
+      wh_salary_configs = [
         # UNA仓库薪资配置
         ("WSC-UNA-P0-库内","UNA","P0","库内",11.5,0,0,0,25,50,100,0,50,30,'[]',"按小时","2026-01-01","2026-12-31",""),
         ("WSC-UNA-P1-库内","UNA","P1","库内",12.0,0,0,0,25,50,100,50,80,50,'[{"skill":"叉车","bonus":1.5}]',"按小时","2026-01-01","2026-12-31",""),
@@ -1183,22 +1206,24 @@ def seed_data():
         ("WSC-EMR-P2-装卸","EMR","P2","装卸",13.0,160,290,340,25,50,100,70,90,55,'[{"skill":"叉车","bonus":1.5}]',"按柜","2026-01-01","2026-12-31",""),
         ("WSC-EMR-P3-装卸","EMR","P3","装卸",14.0,180,320,380,25,50,100,90,120,75,'[{"skill":"叉车","bonus":1.5}]',"按柜","2026-01-01","2026-12-31",""),
         ("WSC-EMR-P4-管理","EMR","P4","管理",15.5,0,0,0,25,50,100,130,180,110,'[]',"按小时","2026-01-01","2026-12-31",""),
-    ]
-    c.executemany("""INSERT INTO warehouse_salary_config(id,warehouse_code,grade,position_type,
+      ]
+      c.executemany("""INSERT INTO warehouse_salary_config(id,warehouse_code,grade,position_type,
             hourly_rate,container_rate_20gp,container_rate_40gp,container_rate_45hc,
             night_bonus_pct,weekend_bonus_pct,holiday_bonus_pct,perf_base,perf_excellent_bonus,perf_good_bonus,
             special_skill_bonus,settle_method,effective_from,effective_to,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO NOTHING""", wh_salary_configs)
 
-    # ── Suppliers ──
-    suppliers_data = [("SUP-001","德信人力","人力供应商","渊博","CT-2025-001","2025-01-01","2026-12-31","月结","EUR","陈刚","+49-176-2001","chen@dexin.de","Köln","供应商自行报税","仓内操作,装卸柜",'["纯派遣","流程承包"]',"Sparkasse Köln","DE89370400440532013100",50,15,"合作中","A",""),
-              ("SUP-002","欧华劳务","人力供应商","渊博","CT-2025-002","2025-03-01","2026-06-30","半月结","EUR","赵丽","+49-176-2002","zhao@ouhua.de","Düsseldorf","我方代报税","装卸柜,叉车",'["纯派遣"]',"Deutsche Bank","DE89370400440532013200",30,8,"合作中","B",""),
-              ("SUP-003","环球人才","人力供应商","579","CT-2025-003","2025-06-01","2026-12-31","月结","EUR","孙明","+49-176-2003","sun@global.de","Duisburg","供应商自行报税","仓内操作,装卸柜,管理",'["纯派遣","整仓承包"]',"Commerzbank","DE89370400440532013300",40,10,"合作中","A","")]
-    sup_insert_sql = "INSERT INTO suppliers VALUES("+",".join(["?"]*25)+")"
-    c.executemany(sup_insert_sql, [s+("","") for s in suppliers_data])
+    # ── Suppliers (only seed if empty — preserves user-added suppliers) ──
+    if _table_empty("suppliers"):
+      suppliers_data = [("SUP-001","德信人力","人力供应商","渊博","CT-2025-001","2025-01-01","2026-12-31","月结","EUR","陈刚","+49-176-2001","chen@dexin.de","Köln","供应商自行报税","仓内操作,装卸柜",'["纯派遣","流程承包"]',"Sparkasse Köln","DE89370400440532013100",50,15,"合作中","A",""),
+                ("SUP-002","欧华劳务","人力供应商","渊博","CT-2025-002","2025-03-01","2026-06-30","半月结","EUR","赵丽","+49-176-2002","zhao@ouhua.de","Düsseldorf","我方代报税","装卸柜,叉车",'["纯派遣"]',"Deutsche Bank","DE89370400440532013200",30,8,"合作中","B",""),
+                ("SUP-003","环球人才","人力供应商","579","CT-2025-003","2025-06-01","2026-12-31","月结","EUR","孙明","+49-176-2003","sun@global.de","Duisburg","供应商自行报税","仓内操作,装卸柜,管理",'["纯派遣","整仓承包"]',"Commerzbank","DE89370400440532013300",40,10,"合作中","A","")]
+      sup_insert_sql = "INSERT INTO suppliers VALUES("+",".join(["?"]*25)+")"
+      c.executemany(sup_insert_sql, [s+("","") for s in suppliers_data])
 
-    # ── Employees ──
-    emps = [
+    # ── Employees (only seed if empty — preserves user-added employees) ──
+    if _table_empty("employees"):
+      emps = [
         ("YB-001","张三","+49-176-0001","zh.san@mail.de","CN","男","1990-05-15","护照","E12345001","Hamburg 45","自有",None,"渊博","运营部","UNA","UNA,DHL","装卸","P2","P2","按小时",12.5,13.0,0,0,"我方报税","T001","12345678901","1","SS-001","DE89370400440532013000","AOK","中,德","叉车证","劳动合同","整仓承包","2025-03-15","2027-03-14","李梅","+49-176-9001",None,None,20,30,"在职","2025-03-15",None,"1001","YB-001",0),
         ("YB-002","李四","+49-176-0002","li.si@mail.de","CN","男","1988-11-20","护照","E12345002","Berlin 12","自有",None,"渊博","运营部","DHL","DHL,UNA","库内","P2","P2","按小时",12.5,12.0,0,0,"我方报税","T002","23456789012","1","SS-002","DE89370400440532013001","TK","中,英",None,"劳动合同","纯派遣","2025-06-01","2027-05-31","王丽","+49-176-9002",None,None,20,30,"在职","2025-06-01",None,"1002","YB-002",0),
         ("YB-003","王五","+49-176-0003",None,"VN","男","1992-03-10","签证","E12345003","Hamburg 78","供应商","SUP-001","渊博","运营部","UNA","UNA","装卸","P0","P0","按小时",11.0,11.0,0,0,"供应商报税","","","","","","","越,德",None,"劳务合同","纯派遣","2025-09-01","2026-08-31","阮文勇","+49-176-9003","WP-VN-003","2026-09-01",20,30,"在职","2025-09-01",None,"1003","YB-003",0),
@@ -1211,20 +1236,93 @@ def seed_data():
         ("YB-010","武志强","+49-176-0010",None,"CN","男","1990-02-14","护照","E12345010","Emmerich 8","自有",None,"渊博","运营部","EMR","EMR,CMA","装卸","P4","P4","按小时",15.0,15.0,0,0,"我方报税","T010","67890123456","1","SS-010","DE89370400440532013009","AOK","中,德,英","叉车证","劳动合同","纯派遣","2024-01-15","2026-12-31","武芳芳","+49-176-9010",None,None,20,30,"在职","2024-01-15",None,"1010","YB-010",0),
         ("YB-011","赵慧","+49-176-0020",None,"CN","女","1990-06-15","护照","E12345020","Köln 88","自有",None,"渊博","人事部","UNA","","HR专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T020","88901234567","1","SS-020","DE11112222333344445555","AOK","中,德,英","","劳动合同",None,"2024-03-01","2027-02-28","赵明","+49-176-9020",None,None,20,30,"在职","2024-03-01",None,"2001","YB-011",0),
         ("YB-012","孙琳","+49-176-0021",None,"CN","女","1988-03-20","护照","E12345021","Köln 99","自有",None,"渊博","财务部","UNA","","财务专员","M2","M2","月薪",14.0,0,0,0,"我方报税","T021","99012345678","1","SS-021","DE22223333444455556666","TK","中,德","","劳动合同",None,"2024-05-01","2027-04-30","孙明","+49-176-9021",None,None,20,30,"在职","2024-05-01",None,"2002","YB-012",0),
-    ]
-    emp_insert_sql = "INSERT INTO employees(id,name,phone,email,nationality,gender,birth_date,id_type,id_number,address,source,supplier_id,biz_line,department,primary_wh,dispatch_whs,position,grade,wage_level,settle_method,base_salary,hourly_rate,perf_bonus,extra_bonus,tax_mode,tax_no,tax_id,tax_class,ssn,iban,health_insurance,languages,special_skills,contract_type,dispatch_type,contract_start,contract_end,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,annual_leave_days,sick_leave_days,status,join_date,leave_date,pin,file_folder,has_account) VALUES("+",".join(["?"]*len(emps[0]))+")"
-    c.executemany(emp_insert_sql, emps)
+      ]
+      emp_insert_sql = "INSERT INTO employees(id,name,phone,email,nationality,gender,birth_date,id_type,id_number,address,source,supplier_id,biz_line,department,primary_wh,dispatch_whs,position,grade,wage_level,settle_method,base_salary,hourly_rate,perf_bonus,extra_bonus,tax_mode,tax_no,tax_id,tax_class,ssn,iban,health_insurance,languages,special_skills,contract_type,dispatch_type,contract_start,contract_end,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,annual_leave_days,sick_leave_days,status,join_date,leave_date,pin,file_folder,has_account) VALUES("+",".join(["?"]*len(emps[0]))+")"
+      c.executemany(emp_insert_sql, emps)
 
-    # ── Regions - 大区管理 (must follow employees due to FK) ──
-    for reg in [
-        ("REG-RUHRW", "鲁尔西", "YB-008", "周强", "鲁尔区西部, 包括Köln/Düsseldorf区域仓库", "UNA,DHL", "启用"),
-        ("REG-RUHRE", "鲁尔东", "YB-009", "吴亮", "鲁尔区东部, 包括Duisburg/Essen区域仓库", "W579,CMA", "启用"),
-        ("REG-SOUTH", "南战区", "YB-010", "郑鹏", "南部战区, 包括Emmerich等区域仓库", "EMR", "启用"),
-    ]:
-        c.execute("""INSERT INTO regions(code,name,manager_id,manager_name,description,warehouse_codes,status)
-            VALUES(?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING""", reg)
+      # ── Regions - 大区管理 (must follow employees due to FK) ──
+      for reg in [
+          ("REG-RUHRW", "鲁尔西", "YB-008", "周强", "鲁尔区西部, 包括Köln/Düsseldorf区域仓库", "UNA,DHL", "启用"),
+          ("REG-RUHRE", "鲁尔东", "YB-009", "吴亮", "鲁尔区东部, 包括Duisburg/Essen区域仓库", "W579,CMA", "启用"),
+          ("REG-SOUTH", "南战区", "YB-010", "郑鹏", "南部战区, 包括Emmerich等区域仓库", "EMR", "启用"),
+      ]:
+          c.execute("""INSERT INTO regions(code,name,manager_id,manager_name,description,warehouse_codes,status)
+              VALUES(?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING""", reg)
 
-    # ── Job Positions - 岗位定义 (可自行设定，关联到花名册) ──
+      # ── Leave Balances ──
+      for e in emps:
+          for lt,total in [("annual",20),("sick",30),("personal",5)]:
+              used = random.randint(0,3) if lt!="sick" else random.randint(0,2)
+              c.execute("INSERT INTO leave_balances VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+                  (f"LB-{e[0]}-2026-{lt}",e[0],2026,lt,total,used,0,total-used))
+
+      # ── Sample data ──
+      for lr in [
+          ("LR-001","YB-001","张三","P2","UNA","annual","2026-02-20","2026-02-21",2,"家庭事务",None,None,"2026-02-10","已批准","王磊","2026-02-11","同意",None,None,None),
+          ("LR-002","YB-006","刘芳","P2","W579","sick","2026-02-05","2026-02-07",3,"感冒",None,"AU","2026-02-05","已批准","张伟","2026-02-05","AU已提供",None,None,None),
+          ("LR-003","YB-008","Maria K.","P2","DHL","personal","2026-02-18","2026-02-18",1,"私事",None,None,"2026-02-15","待审批",None,None,None,None,None,None),
+      ]:
+          c.execute("INSERT INTO leave_requests(id,employee_id,employee_name,grade,warehouse_code,leave_type,start_date,end_date,days,reason,proof_url,proof_type,apply_date,status,reviewer,review_date,review_comments,approver,approve_date,cancel_reason) VALUES("+",".join(["?"]*20)+")", lr)
+
+      for ec in [
+          ("EC-001","YB-010","武志强","P4","运营部","差旅",85.50,"EUR","2026-02-01","CMA出差交通费",'[{"item":"火车票","amount":42.5},{"item":"午餐","amount":15},{"item":"出租车","amount":28}]',None,3,"2026-02-03","已批准","王磊","2026-02-04","票据齐全","孙琳","2026-02-05","",1,"2026-02-10","孙琳",""),
+          ("EC-002","YB-001","张三","P2","运营部","工具",23.00,"EUR","2026-02-08","安全手套",'[{"item":"安全手套2双","amount":23}]',None,1,"2026-02-08","待审批",None,None,None,None,None,None,0,None,None,""),
+      ]:
+          c.execute("INSERT INTO expense_claims(id,employee_id,employee_name,grade,department,claim_type,amount,currency,claim_date,description,items,receipt_urls,receipt_count,apply_date,status,reviewer,review_date,review_comments,approver,approve_date,approve_comments,paid,paid_date,paid_by,notes) VALUES("+",".join(["?"]*25)+")", ec)
+
+      for ef in [
+          ("EF-001","YB-001","入职文件","劳动合同_张三.pdf",None,"pdf",0,"劳动合同","2025-03-15","hr","入职","合同",1),
+          ("EF-002","YB-001","证件","护照_张三.pdf",None,"pdf",0,"护照扫描件","2025-03-15","hr","入职","证件",1),
+          ("EF-003","YB-005","证件","叉车证_陈大明.pdf",None,"pdf",0,"叉车操作证","2024-06-01","hr","入职","资格证",1),
+          ("EF-004","YB-010","晋升","P4晋升评定表.pdf",None,"pdf",0,"P3→P4晋升","2025-06-01","hr","在职","晋升",0),
+      ]:
+          c.execute("INSERT INTO employee_files(id,employee_id,category,file_name,file_url,file_type,file_size,description,upload_date,uploaded_by,stage,tags,confidential) VALUES("+",".join(["?"]*13)+")", ef)
+
+      for pr in [
+          ("PR-001","YB-001","张三","P2","2026-Q1","季度考核",'[{"dim":"KPI","w":40},{"dim":"质量","w":30},{"dim":"出勤","w":20},{"dim":"态度","w":10}]','[{"dim":"KPI","s":85},{"dim":"质量","s":90},{"dim":"出勤","s":95},{"dim":"态度","s":88}]',88.5,"良好(B)","王磊","2026-01-31","","表现稳定","已完成"),
+          ("PR-002","YB-010","武志强","P4","2026-Q1","季度考核",'[{"dim":"班组KPI","w":35},{"dim":"管理","w":25},{"dim":"安全","w":15},{"dim":"培养","w":15},{"dim":"满意度","w":10}]','[{"dim":"班组KPI","s":92},{"dim":"管理","s":88},{"dim":"安全","s":100},{"dim":"培养","s":85},{"dim":"满意度","s":90}]',91.1,"优秀(A)","admin","2026-01-31","","建议P5晋升","已完成"),
+      ]:
+          c.execute("INSERT INTO performance_reviews(id,employee_id,employee_name,grade,review_period,review_type,dimensions,scores,total_score,rating,reviewer,review_date,employee_comments,reviewer_comments,status) VALUES("+",".join(["?"]*15)+")", pr)
+
+      for qr in [
+          ("QR-001","UNA Logistics","Hr. Schmidt","QT-001","人力派遣","普通仓内","UNA","UNA拣货派遣",8,160,"6-20人",13.80,None,13.80,2208.0,"EUR","2026-03-31","2026-02-01","admin","P9","已通过","已通过","已接受","PRJ-UNA",""),
+          ("QR-002","579 Express","张经理","QT-002","人力派遣","装卸柜","W579","579装卸派遣",4,80,"4-10人",15.20,None,15.20,1216.0,"EUR","2026-04-30","2026-02-05","mgr579","P7","待审核","待审批","待回复",None,""),
+      ]:
+          c.execute("INSERT INTO quotation_records(id,client_name,client_contact,template_id,biz_type,service_type,warehouse_code,project_desc,headcount,estimated_hours,volume_tier,base_price,adjustments,final_price,total_amount,currency,valid_until,quote_date,quoted_by,quoted_by_grade,review_status,approve_status,client_response,contract_no,notes) VALUES("+",".join(["?"]*25)+")", qr)
+
+      # ── Timesheet ──
+      random.seed(42)
+      emp_ts = [("YB-001","张三","自有",None,"渊博","UNA","装卸","P2","按小时",14),
+                ("YB-002","李四","自有",None,"渊博","DHL","库内","P2","按小时",12.5),
+                ("YB-005","陈大明","供应商","SUP-002","渊博","DHL","装卸","P3","按柜",14.5),
+                ("YB-006","刘芳","自有",None,"579","W579","库内","P2","按小时",12),
+                ("YB-010","武志强","自有",None,"渊博","EMR","装卸","P4","按小时",15.5)]
+      ts_id = 1
+      for d in range(3,13):
+          dt = f"2026-02-{d:02d}"
+          for eid,enm,src,supid,biz,wh,pos,grd,settle,rate in emp_ts:
+              sH=7+random.randint(0,2); eH=sH+4+random.randint(0,5); hrs=eH-sH
+              hP=round(rate*hrs,2); si=round(hP*.12,2) if src=="自有" else 0; tx=round(hP*.08,2) if src=="自有" else 0
+              net=round(hP-si-tx,2)
+              c.execute("""INSERT INTO timesheet(id,employee_id,employee_name,source,supplier_id,biz_line,
+                  work_date,warehouse_code,start_time,end_time,hours,position,grade,settle_method,base_rate,
+                  hourly_pay,ssi_deduct,tax_deduct,net_pay,wh_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (f"WT-{ts_id:04d}",eid,enm,src,supid,biz,dt,wh,f"{sH:02d}:00",f"{eH:02d}:00",hrs,pos,grd,settle,rate,hP,si,tx,net,
+                   random.choice(["已入账","已入账","待财务确认","待仓库审批"])))
+              ts_id += 1
+
+      # ── Enterprise Documents ──
+      for ed in [
+          ("ED-001","仓库安全操作手册","安全培训",None,None,"pdf",0,"仓库日常安全规范和注意事项","安全,规范",None,"admin","全员","已发布"),
+          ("ED-002","叉车操作SOP","操作SOP",None,None,"pdf",0,"叉车标准操作规程","叉车,SOP","UNA","admin","装卸岗","已发布"),
+          ("ED-003","新员工入职培训手册","安全培训",None,None,"pdf",0,"新员工入职安全培训资料","入职,培训",None,"admin","全员","已发布"),
+          ("ED-004","消防安全培训","安全培训",None,None,"pdf",0,"消防安全知识和应急处理流程","消防,安全",None,"admin","全员","已发布"),
+          ("ED-005","装卸柜标准流程","操作SOP",None,None,"pdf",0,"集装箱装卸标准操作流程","装卸,SOP","DHL","admin","装卸岗","已发布"),
+          ("ED-006","仓库管理制度","管理制度",None,None,"pdf",0,"仓库日常管理制度和考核标准","管理,制度",None,"admin","管理层","草稿"),
+      ]:
+          c.execute("INSERT INTO enterprise_documents(id,title,category,file_name,file_url,file_type,file_size,description,tags,warehouse_code,uploaded_by,send_to,status) VALUES("+",".join(["?"]*13)+")", ed)
+
+    # ── Job Positions (uses ON CONFLICT DO NOTHING — safe to re-run) ──
     # 运营系列
     job_positions_data = [
         ("OPS-DIR","运营总监","Ops Director","Betriebsleiter","运营","P","P9","ops_director",85,"all","all",1,1,"对所有仓有修改权，公司运营最高负责人"),
@@ -1253,80 +1351,7 @@ def seed_data():
             default_role,level,data_scope,salary_scope,can_dispatch_request,can_transfer_request,description)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(code) DO NOTHING""", job_positions_data)
 
-    # ── Leave Balances ──
-    for e in emps:
-        for lt,total in [("annual",20),("sick",30),("personal",5)]:
-            used = random.randint(0,3) if lt!="sick" else random.randint(0,2)
-            c.execute("INSERT INTO leave_balances VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
-                (f"LB-{e[0]}-2026-{lt}",e[0],2026,lt,total,used,0,total-used))
-
-    # ── Sample data ──
-    for lr in [
-        ("LR-001","YB-001","张三","P2","UNA","annual","2026-02-20","2026-02-21",2,"家庭事务",None,None,"2026-02-10","已批准","王磊","2026-02-11","同意",None,None,None),
-        ("LR-002","YB-006","刘芳","P2","W579","sick","2026-02-05","2026-02-07",3,"感冒",None,"AU","2026-02-05","已批准","张伟","2026-02-05","AU已提供",None,None,None),
-        ("LR-003","YB-008","Maria K.","P2","DHL","personal","2026-02-18","2026-02-18",1,"私事",None,None,"2026-02-15","待审批",None,None,None,None,None,None),
-    ]:
-        c.execute("INSERT INTO leave_requests(id,employee_id,employee_name,grade,warehouse_code,leave_type,start_date,end_date,days,reason,proof_url,proof_type,apply_date,status,reviewer,review_date,review_comments,approver,approve_date,cancel_reason) VALUES("+",".join(["?"]*20)+")", lr)
-
-    for ec in [
-        ("EC-001","YB-010","武志强","P4","运营部","差旅",85.50,"EUR","2026-02-01","CMA出差交通费",'[{"item":"火车票","amount":42.5},{"item":"午餐","amount":15},{"item":"出租车","amount":28}]',None,3,"2026-02-03","已批准","王磊","2026-02-04","票据齐全","孙琳","2026-02-05","",1,"2026-02-10","孙琳",""),
-        ("EC-002","YB-001","张三","P2","运营部","工具",23.00,"EUR","2026-02-08","安全手套",'[{"item":"安全手套2双","amount":23}]',None,1,"2026-02-08","待审批",None,None,None,None,None,None,0,None,None,""),
-    ]:
-        c.execute("INSERT INTO expense_claims(id,employee_id,employee_name,grade,department,claim_type,amount,currency,claim_date,description,items,receipt_urls,receipt_count,apply_date,status,reviewer,review_date,review_comments,approver,approve_date,approve_comments,paid,paid_date,paid_by,notes) VALUES("+",".join(["?"]*25)+")", ec)
-
-    for ef in [
-        ("EF-001","YB-001","入职文件","劳动合同_张三.pdf",None,"pdf",0,"劳动合同","2025-03-15","hr","入职","合同",1),
-        ("EF-002","YB-001","证件","护照_张三.pdf",None,"pdf",0,"护照扫描件","2025-03-15","hr","入职","证件",1),
-        ("EF-003","YB-005","证件","叉车证_陈大明.pdf",None,"pdf",0,"叉车操作证","2024-06-01","hr","入职","资格证",1),
-        ("EF-004","YB-010","晋升","P4晋升评定表.pdf",None,"pdf",0,"P3→P4晋升","2025-06-01","hr","在职","晋升",0),
-    ]:
-        c.execute("INSERT INTO employee_files(id,employee_id,category,file_name,file_url,file_type,file_size,description,upload_date,uploaded_by,stage,tags,confidential) VALUES("+",".join(["?"]*13)+")", ef)
-
-    for pr in [
-        ("PR-001","YB-001","张三","P2","2026-Q1","季度考核",'[{"dim":"KPI","w":40},{"dim":"质量","w":30},{"dim":"出勤","w":20},{"dim":"态度","w":10}]','[{"dim":"KPI","s":85},{"dim":"质量","s":90},{"dim":"出勤","s":95},{"dim":"态度","s":88}]',88.5,"良好(B)","王磊","2026-01-31","","表现稳定","已完成"),
-        ("PR-002","YB-010","武志强","P4","2026-Q1","季度考核",'[{"dim":"班组KPI","w":35},{"dim":"管理","w":25},{"dim":"安全","w":15},{"dim":"培养","w":15},{"dim":"满意度","w":10}]','[{"dim":"班组KPI","s":92},{"dim":"管理","s":88},{"dim":"安全","s":100},{"dim":"培养","s":85},{"dim":"满意度","s":90}]',91.1,"优秀(A)","admin","2026-01-31","","建议P5晋升","已完成"),
-    ]:
-        c.execute("INSERT INTO performance_reviews(id,employee_id,employee_name,grade,review_period,review_type,dimensions,scores,total_score,rating,reviewer,review_date,employee_comments,reviewer_comments,status) VALUES("+",".join(["?"]*15)+")", pr)
-
-    for qr in [
-        ("QR-001","UNA Logistics","Hr. Schmidt","QT-001","人力派遣","普通仓内","UNA","UNA拣货派遣",8,160,"6-20人",13.80,None,13.80,2208.0,"EUR","2026-03-31","2026-02-01","admin","P9","已通过","已通过","已接受","PRJ-UNA",""),
-        ("QR-002","579 Express","张经理","QT-002","人力派遣","装卸柜","W579","579装卸派遣",4,80,"4-10人",15.20,None,15.20,1216.0,"EUR","2026-04-30","2026-02-05","mgr579","P7","待审核","待审批","待回复",None,""),
-    ]:
-        c.execute("INSERT INTO quotation_records(id,client_name,client_contact,template_id,biz_type,service_type,warehouse_code,project_desc,headcount,estimated_hours,volume_tier,base_price,adjustments,final_price,total_amount,currency,valid_until,quote_date,quoted_by,quoted_by_grade,review_status,approve_status,client_response,contract_no,notes) VALUES("+",".join(["?"]*25)+")", qr)
-
-    # ── Timesheet ──
-    random.seed(42)
-    emp_ts = [("YB-001","张三","自有",None,"渊博","UNA","装卸","P2","按小时",14),
-              ("YB-002","李四","自有",None,"渊博","DHL","库内","P2","按小时",12.5),
-              ("YB-005","陈大明","供应商","SUP-002","渊博","DHL","装卸","P3","按柜",14.5),
-              ("YB-006","刘芳","自有",None,"579","W579","库内","P2","按小时",12),
-              ("YB-010","武志强","自有",None,"渊博","EMR","装卸","P4","按小时",15.5)]
-    ts_id = 1
-    for d in range(3,13):
-        dt = f"2026-02-{d:02d}"
-        for eid,enm,src,supid,biz,wh,pos,grd,settle,rate in emp_ts:
-            sH=7+random.randint(0,2); eH=sH+4+random.randint(0,5); hrs=eH-sH
-            hP=round(rate*hrs,2); si=round(hP*.12,2) if src=="自有" else 0; tx=round(hP*.08,2) if src=="自有" else 0
-            net=round(hP-si-tx,2)
-            c.execute("""INSERT INTO timesheet(id,employee_id,employee_name,source,supplier_id,biz_line,
-                work_date,warehouse_code,start_time,end_time,hours,position,grade,settle_method,base_rate,
-                hourly_pay,ssi_deduct,tax_deduct,net_pay,wh_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (f"WT-{ts_id:04d}",eid,enm,src,supid,biz,dt,wh,f"{sH:02d}:00",f"{eH:02d}:00",hrs,pos,grd,settle,rate,hP,si,tx,net,
-                 random.choice(["已入账","已入账","待财务确认","待仓库审批"])))
-            ts_id += 1
-
-    # ── Enterprise Documents ──
-    for ed in [
-        ("ED-001","仓库安全操作手册","安全培训",None,None,"pdf",0,"仓库日常安全规范和注意事项","安全,规范",None,"admin","全员","已发布"),
-        ("ED-002","叉车操作SOP","操作SOP",None,None,"pdf",0,"叉车标准操作规程","叉车,SOP","UNA","admin","装卸岗","已发布"),
-        ("ED-003","新员工入职培训手册","安全培训",None,None,"pdf",0,"新员工入职安全培训资料","入职,培训",None,"admin","全员","已发布"),
-        ("ED-004","消防安全培训","安全培训",None,None,"pdf",0,"消防安全知识和应急处理流程","消防,安全",None,"admin","全员","已发布"),
-        ("ED-005","装卸柜标准流程","操作SOP",None,None,"pdf",0,"集装箱装卸标准操作流程","装卸,SOP","DHL","admin","装卸岗","已发布"),
-        ("ED-006","仓库管理制度","管理制度",None,None,"pdf",0,"仓库日常管理制度和考核标准","管理,制度",None,"admin","管理层","草稿"),
-    ]:
-        c.execute("INSERT INTO enterprise_documents(id,title,category,file_name,file_url,file_type,file_size,description,tags,warehouse_code,uploaded_by,send_to,status) VALUES("+",".join(["?"]*13)+")", ed)
-
-    # ── ID Naming Rules ──
+    # ── ID Naming Rules (uses ON CONFLICT DO NOTHING — safe to re-run) ──
     c.execute("""INSERT INTO id_naming_rules(id,prefix,separator,next_number,padding,description,updated_by)
         VALUES('default','YB','-',13,3,'默认员工ID规则: YB-001','admin')
         ON CONFLICT(id) DO NOTHING""")
@@ -1463,13 +1488,22 @@ def restore_database(filename: str) -> dict:
 def auto_backup_before_upgrade() -> str:
     """Create an automatic backup before database upgrade/reinitialization.
     Only creates backup if there is existing data to preserve.
+    Checks employees, users, AND timesheet tables — not just employees.
     Returns backup filepath or empty string if no data to backup."""
+    _BACKUP_CHECK_TABLES = ("employees", "users", "timesheet")
     try:
         conn = get_db()
-        # Check if there's actual user data (not just seed data)
-        emp_count = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
+        has_data = False
+        for table in _BACKUP_CHECK_TABLES:
+            try:
+                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                if count > 0:
+                    has_data = True
+                    break
+            except Exception:
+                continue
         conn.close()
-        if emp_count > 0:
+        if has_data:
             return backup_database(tag="pre_upgrade")
         return ""
     except Exception:
