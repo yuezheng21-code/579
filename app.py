@@ -4270,6 +4270,13 @@ app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 @app.get("/{path:path}")
 def spa(path: str):
+    # 根路径 → 公司介绍首页
+    if not path:
+        for d in [STATIC_DIR, os.path.dirname(__file__)]:
+            hp = os.path.join(d, "home.html")
+            if os.path.isfile(hp):
+                return FileResponse(hp)
+
     fp = os.path.join(STATIC_DIR, path)
     if path and os.path.isfile(fp): return FileResponse(fp)
 

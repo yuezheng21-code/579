@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>渊博579 - 公司介绍</title>
+<link rel="icon" href="icon-192.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f172a;--card:#1e293b;--card2:#334155;--border:#475569;--pri:#4f6ef7;--pri2:#6366f1;
+--green:#22c55e;--red:#ef4444;--yellow:#eab308;--orange:#f97316;--cyan:#06b6d4;
+--text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;--radius:10px}
+html,body{min-height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+.page{min-height:100vh;display:flex;flex-direction:column;
+  background:radial-gradient(circle at 20% 15%,rgba(79,110,247,.18),transparent 40%),
+             radial-gradient(circle at 80% 85%,rgba(99,102,241,.14),transparent 42%),
+             radial-gradient(circle at 50% 50%,rgba(6,182,212,.06),transparent 50%),var(--bg)}
+/* Header */
+.top-bar{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid rgba(71,85,105,.3)}
+.top-bar .brand{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700;color:var(--pri)}
+.top-bar .brand img{width:36px;height:36px;border-radius:8px}
+.top-bar .admin-link{font-size:13px;color:var(--text2);text-decoration:none;padding:6px 14px;border:1px solid var(--border);border-radius:6px;transition:.2s}
+.top-bar .admin-link:hover{color:var(--pri);border-color:var(--pri);background:rgba(79,110,247,.08)}
+/* Hero */
+.hero{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px 20px;text-align:center}
+.hero-icon{font-size:64px;margin-bottom:16px;animation:float 3s ease-in-out infinite}
+.hero h1{font-size:clamp(28px,5vw,42px);font-weight:800;background:linear-gradient(135deg,var(--pri),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px}
+.hero .subtitle{font-size:clamp(14px,2.5vw,18px);color:var(--text2);max-width:600px;line-height:1.6;margin-bottom:12px}
+/* Company Info */
+.company-info{max-width:720px;width:100%;margin:0 auto 32px;padding:20px 24px;background:rgba(30,41,59,.6);border:1px solid var(--border);border-radius:12px;text-align:left;line-height:1.8;color:var(--text2);font-size:14px;animation:fadeIn .5s ease .1s both}
+.company-info h2{font-size:18px;color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+/* Login Grid */
+.login-section{max-width:720px;width:100%;margin:0 auto;padding:0 24px;animation:fadeIn .5s ease .2s both}
+.login-section h3{font-size:16px;color:var(--text);text-align:center;margin-bottom:16px}
+.login-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.login-btn{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 12px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;text-decoration:none;color:var(--text);transition:.25s;font-size:14px;font-weight:500}
+.login-btn:hover{border-color:var(--pri);background:rgba(79,110,247,.1);transform:translateY(-2px);box-shadow:0 6px 20px rgba(79,110,247,.15)}
+.login-btn .icon{font-size:32px;line-height:1}
+.login-btn .label{font-size:14px;font-weight:600}
+.login-btn .desc{font-size:11px;color:var(--text3);text-align:center}
+/* Footer */
+.footer{padding:24px;text-align:center;color:var(--text3);font-size:12px;margin-top:auto}
+.footer a{color:var(--pri);text-decoration:none}
+.footer a:hover{text-decoration:underline}
+/* Responsive */
+@media(max-width:480px){
+  .top-bar{padding:12px 16px}
+  .hero{padding:24px 16px 12px}
+  .company-info{margin-bottom:20px;padding:16px}
+  .login-section{padding:0 16px}
+  .login-grid{grid-template-columns:repeat(2,1fr);gap:10px}
+  .login-btn{padding:16px 8px}
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <div class="brand">
+      <img src="icon-192.png" alt="Logo">
+      <span>渊博579</span>
+    </div>
+    <a href="/admin.html" class="admin-link">⚙️ 管理后台</a>
+  </div>
+
+  <!-- Hero Section -->
+  <div class="hero">
+    <div class="hero-icon">🏢</div>
+    <h1>渊博579</h1>
+    <div class="subtitle">专业的企业管理与人力资源服务平台</div>
+
+    <!-- Company Info -->
+    <div class="company-info">
+      <h2>📋 公司介绍</h2>
+      <p>渊博579是一家专注于企业管理解决方案的科技公司。我们致力于为企业提供高效、智能的人力资源管理、供应链管理、仓储物流等一体化服务平台。</p>
+      <p style="margin-top:8px">通过先进的技术和创新的管理理念，我们帮助企业优化运营流程、提升管理效率、降低运营成本，助力企业实现数字化转型与可持续发展。</p>
+    </div>
+
+    <!-- Login Section -->
+    <div class="login-section">
+      <h3>请选择登录入口</h3>
+      <div class="login-grid">
+        <a href="/index.html" class="login-btn">
+          <span class="icon">👤</span>
+          <span class="label">客户登录</span>
+          <span class="desc">客户查询与服务</span>
+        </a>
+        <a href="/index.html" class="login-btn">
+          <span class="icon">🏭</span>
+          <span class="label">供应商登录</span>
+          <span class="desc">供应商协同管理</span>
+        </a>
+        <a href="/index.html" class="login-btn">
+          <span class="icon">💼</span>
+          <span class="label">员工登录</span>
+          <span class="desc">员工办公与考勤</span>
+        </a>
+        <a href="/index.html" class="login-btn">
+          <span class="icon">📝</span>
+          <span class="label">求职者登录</span>
+          <span class="desc">求职与招聘信息</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <p>© 2024 渊博579 版权所有 | <a href="/admin.html">管理后台</a></p>
+  </div>
+</div>
+</body>
+</html>
