@@ -4459,3 +4459,192 @@ async def test_admin_html_served():
         r = await ac.get("/admin.html")
     assert r.status_code == 200
     assert "管理后台" in r.text
+
+
+# ── Tests for client, jobseeker roles and updated sup role ──
+
+
+@pytest.fixture
+def client_token():
+    """Get client auth token."""
+    from app import make_token
+    return make_token("client1", "client")
+
+
+@pytest.fixture
+def client_headers(client_token):
+    """Return headers with client token."""
+    return {"Authorization": f"Bearer {client_token}"}
+
+
+@pytest.fixture
+def jobseeker_token():
+    """Get jobseeker auth token."""
+    from app import make_token
+    return make_token("jobseeker1", "jobseeker")
+
+
+@pytest.fixture
+def jobseeker_headers(jobseeker_token):
+    """Return headers with jobseeker token."""
+    return {"Authorization": f"Bearer {jobseeker_token}"}
+
+
+@pytest.mark.asyncio
+async def test_client_login():
+    """Client user can login successfully."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/login", json={"username": "client1", "password": "client123"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["user"]["role"] == "client"
+
+
+@pytest.mark.asyncio
+async def test_jobseeker_login():
+    """Jobseeker user can login successfully."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/login", json={"username": "jobseeker1", "password": "job123"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["user"]["role"] == "jobseeker"
+
+
+@pytest.mark.asyncio
+async def test_client_permissions(client_headers):
+    """Client should only view quotation and settlement modules."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=client_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["role"] == "client"
+    assert data["role_level"] == 5
+    perms = data["permissions"]
+    # Client can view quotation and settlement
+    assert perms["quotation"]["can_view"] == 1
+    assert perms["settlement"]["can_view"] == 1
+    # Client cannot view other modules
+    assert perms.get("employees", {}).get("can_view", 0) == 0
+    assert perms.get("dashboard", {}).get("can_view", 0) == 0
+    assert perms.get("admin", {}).get("can_view", 0) == 0
+    # Client cannot create/edit/delete anything
+    assert perms["quotation"].get("can_create", 0) == 0
+    assert perms["quotation"].get("can_edit", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_jobseeker_permissions(jobseeker_headers):
+    """Jobseeker should view recruit, files, mypage and create files."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/permissions/my", headers=jobseeker_headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["role"] == "jobseeker"
+    assert data["role_level"] == 5
+    perms = data["permissions"]
+    # Jobseeker can view recruit, files, mypage
+    assert perms["recruit"]["can_view"] == 1
+    assert perms["files"]["can_view"] == 1
+    assert perms["mypage"]["can_view"] == 1
+    # Jobseeker can create files (upload)
+    assert perms["files"]["can_create"] == 1
+    # Jobseeker cannot view other modules
+    assert perms.get("employees", {}).get("can_view", 0) == 0
+    assert perms.get("dashboard", {}).get("can_view", 0) == 0
+    assert perms.get("settlement", {}).get("can_view", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_client_data_scope():
+    """Client role should have self_only data scope."""
+    db = database.get_db()
+    rows = db.execute(
+        "SELECT module, data_scope FROM permission_overrides WHERE role='client'"
+    ).fetchall()
+    db.close()
+    # Client should have permission rows for all modules in ALL_M
+    assert len(rows) >= 27  # ALL_M has 27 modules
+    for r in rows:
+        assert r["data_scope"] == "self_only", f"client module {r['module']} has scope {r['data_scope']}"
+
+
+@pytest.mark.asyncio
+async def test_jobseeker_data_scope():
+    """Jobseeker role should have self_only data scope."""
+    db = database.get_db()
+    rows = db.execute(
+        "SELECT module, data_scope FROM permission_overrides WHERE role='jobseeker'"
+    ).fetchall()
+    db.close()
+    # Jobseeker should have permission rows for all modules in ALL_M
+    assert len(rows) >= 27  # ALL_M has 27 modules
+    for r in rows:
+        assert r["data_scope"] == "self_only", f"jobseeker module {r['module']} has scope {r['data_scope']}"
+
+
+@pytest.mark.asyncio
+async def test_sup_can_view_quotation():
+    """Supplier role should be able to view quotation module (for commissions)."""
+    db = database.get_db()
+    row = db.execute(
+        "SELECT can_view FROM permission_overrides WHERE role='sup' AND module='quotation'"
+    ).fetchone()
+    db.close()
+    assert row is not None
+    assert row["can_view"] == 1
+
+
+@pytest.mark.asyncio
+async def test_roles_endpoint_includes_new_roles(auth_headers):
+    """Roles endpoint should include client and jobseeker roles."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/api/roles", headers=auth_headers)
+    assert r.status_code == 200
+    roles = r.json()
+    role_names = [ro["role"] for ro in roles]
+    assert "client" in role_names
+    assert "jobseeker" in role_names
+
+
+@pytest.mark.asyncio
+async def test_client_and_jobseeker_in_role_hierarchy():
+    """Client and jobseeker should be in ROLE_HIERARCHY."""
+    from app import ROLE_HIERARCHY
+    assert "client" in ROLE_HIERARCHY
+    assert "jobseeker" in ROLE_HIERARCHY
+    assert ROLE_HIERARCHY["client"] == 5
+    assert ROLE_HIERARCHY["jobseeker"] == 5
+    # Both should be below worker
+    assert ROLE_HIERARCHY["worker"] > ROLE_HIERARCHY["client"]
+    assert ROLE_HIERARCHY["worker"] > ROLE_HIERARCHY["jobseeker"]
+
+
+@pytest.mark.asyncio
+async def test_client_hidden_fields():
+    """Client role should have hidden fields for employees module."""
+    db = database.get_db()
+    row = db.execute(
+        "SELECT hidden_fields FROM permission_overrides WHERE role='client' AND module='employees'"
+    ).fetchone()
+    db.close()
+    assert row is not None
+    assert "iban" in row["hidden_fields"]
+    assert "base_salary" in row["hidden_fields"]
+
+
+@pytest.mark.asyncio
+async def test_jobseeker_hidden_fields():
+    """Jobseeker role should have hidden fields for employees module."""
+    db = database.get_db()
+    row = db.execute(
+        "SELECT hidden_fields FROM permission_overrides WHERE role='jobseeker' AND module='employees'"
+    ).fetchone()
+    db.close()
+    assert row is not None
+    assert "iban" in row["hidden_fields"]
+    assert "base_salary" in row["hidden_fields"]

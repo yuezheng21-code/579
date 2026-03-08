@@ -2616,6 +2616,16 @@ const App=()=>{
 
   if(!user) return React.createElement(LoginPage,{onLogin:setUser,lang,setLang});
 
+  // Restricted roles: can ONLY see explicitly whitelisted pages
+  const RESTRICTED_ROLE_PAGES={
+    'client':['quotation','settlement'],
+    'jobseeker':['recruit','files','mypage'],
+  };
+
+  // Redirect restricted roles to their default page if current page is not allowed
+  const allowedPages=RESTRICTED_ROLE_PAGES[user&&user.role];
+  if(allowedPages&&!allowedPages.includes(page)){setPage(allowedPages[0]);return null;}
+
   const pages={
     dashboard:DashPage, employees:EmpPage, grades:GradePage, performance:PerfPage,
     quotation:QuotePage, files:FilePage, leave:LeavePage, expense:ExpPage,
@@ -2630,6 +2640,8 @@ const App=()=>{
   const PageComp=pages[page];
 
   const canView=(item)=>{
+    const restricted=RESTRICTED_ROLE_PAGES[user.role];
+    if(restricted)return restricted.includes(item.key);
     if(!item.roles)return true;
     return item.roles.includes(user.role);
   };

@@ -2339,6 +2339,8 @@ ROLE_HIERARCHY = {
     "admin_specialist": 35, # 行政专员 - Admin Specialist
     "sup": 30,     # Supplier
     "worker": 10,  # Worker
+    "client": 5,   # Client (customer)
+    "jobseeker": 5, # Job seeker
 }
 
 # Role sets for access control — derived from organizational hierarchy
@@ -2808,6 +2810,8 @@ def get_roles(user=Depends(get_user)):
         {"role": "wh", "label": "仓库", "level": 40, "description": "仓库管理 (通用)"},
         {"role": "sup", "label": "供应商", "level": 30, "description": "供应商账号"},
         {"role": "worker", "label": "员工/工人", "level": 10, "description": "一线工人 (P0-P3)"},
+        {"role": "client", "label": "客户", "level": 5, "description": "客户账号 - 仅查看报价和账单"},
+        {"role": "jobseeker", "label": "求职者", "level": 5, "description": "求职者 - 查看招聘需求和上传文件"},
     ]
 
 # Module field definitions with Chinese labels and sensitivity markers
