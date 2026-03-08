@@ -805,6 +805,8 @@ def ensure_demo_users():
         ("wh", "wh123", "王磊(仓库)", "wh", None, "UNA"),
         ("sup1", "sup123", "陈刚(德信人力)", "sup", "SUP-001", None),
         ("worker1", "w123", "张三", "worker", None, None),
+        ("client1", "client123", "李客户(客户)", "client", None, None),
+        ("jobseeker1", "job123", "王求职(求职者)", "jobseeker", None, None),
     ]
     conn = get_db(); c = conn.cursor()
     for username, password, display_name, role, supplier_id, warehouse_code in demo_users:
@@ -1089,7 +1091,7 @@ def seed_data():
                ["container","schedule","safety"],["container","schedule","safety"],[],["timesheet","container"],["timesheet","container"],[]),
         "fin": (["dashboard","employees","timesheet","settlement","suppliers","analytics","expense","quotation"],
                [],[],[],["timesheet","settlement","analytics","expense"],["timesheet","expense"],[]),
-        "sup": (["dashboard","employees","timesheet","settlement","schedule","leave","safety"],
+        "sup": (["dashboard","employees","timesheet","settlement","schedule","leave","safety","quotation"],
                 ["leave"],["leave"],[],["employees","timesheet"],[],[]),
         "mgr": (["dashboard","employees","suppliers","talent","dispatch","recruit","timesheet","settlement",
                  "warehouse","schedule","templates","clock","container","messages","analytics",
@@ -1101,6 +1103,8 @@ def seed_data():
                 ["leave","quotation","safety"],
                 ["employees","timesheet"]),
         "worker": (["clock","container","schedule","leave","expense","mypage","safety"],["container","leave","expense","safety"],[],[],[],[],[]),
+        "client": (["quotation","settlement"],[],[],[],[],[],[]),
+        "jobseeker": (["recruit","files","mypage"],["files"],[],[],[],[],[]),
     }
     # data_scope per role: determines what data the role can access
     # 'all' = full access, 'regional' = regional warehouses,
@@ -1129,6 +1133,8 @@ def seed_data():
         "wh": "own_warehouse",
         "sup": "own_supplier",
         "worker": "self_only",
+        "client": "self_only",
+        "jobseeker": "self_only",
     }
     # Default hidden_fields per role per module for sensitive data protection
     # Sensitive employee fields: birth_date, id_number, tax_no, tax_id, ssn, iban,
@@ -1156,6 +1162,8 @@ def seed_data():
         "wh": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
         "sup": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry"},
         "worker": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,phone,email"},
+        "client": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,phone,email"},
+        "jobseeker": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,phone,email"},
     }
     for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
         scope = role_data_scope.get(role, "all")
