@@ -824,6 +824,111 @@ async def toggle_account(username: str, user=Depends(get_user)):
     
     return {"ok": True, "active": new_status}
 
+@app.put("/api/accounts/{username}")
+async def update_account(username: str, request: Request, user=Depends(get_user)):
+    """修改账号信息（角色、显示名、仓库、业务线等）"""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可修改账号信息")
+
+    data = await request.json()
+    allowed_fields = {"role", "display_name", "warehouse_code", "biz_line", "supplier_id", "color", "avatar"}
+    updates = {k: v for k, v in data.items() if k in allowed_fields}
+    if not updates:
+        raise HTTPException(400, "无有效更新字段")
+
+    # Validate role if being changed
+    if "role" in updates and updates["role"] not in ROLE_HIERARCHY:
+        raise HTTPException(400, f"无效角色: {updates['role']}")
+
+    db = database.get_db()
+    try:
+        u = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        if not u:
+            raise HTTPException(404, "账号不存在")
+
+        set_clauses = ", ".join(f"{k}=?" for k in updates)
+        values = list(updates.values()) + [username]
+        db.execute(f"UPDATE users SET {set_clauses} WHERE username=?", values)
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"更新账号失败: {str(e)}")
+    finally:
+        db.close()
+
+    audit_log(user.get("username", ""), "update_account", "user", username,
+              f"账号信息更新: {json.dumps(updates, ensure_ascii=False)}")
+
+    return {"ok": True, "updated": updates}
+
+@app.delete("/api/accounts/{username}")
+async def delete_account(username: str, user=Depends(get_user)):
+    """删除账号"""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可删除账号")
+
+    if username == user.get("username"):
+        raise HTTPException(400, "不能删除自己的账号")
+
+    db = database.get_db()
+    try:
+        u = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        if not u:
+            raise HTTPException(404, "账号不存在")
+
+        employee_id = u["employee_id"]
+        db.execute("DELETE FROM users WHERE username=?", (username,))
+        if employee_id:
+            db.execute("UPDATE employees SET has_account=0 WHERE id=?", (employee_id,))
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"删除账号失败: {str(e)}")
+    finally:
+        db.close()
+
+    audit_log(user.get("username", ""), "delete_account", "user", username,
+              f"账号已删除由 {user.get('username')} 执行")
+
+    return {"ok": True}
+
+@app.post("/api/accounts/{username}/set-password")
+async def set_account_password(username: str, request: Request, user=Depends(get_user)):
+    """管理员设置账号密码"""
+    if user.get("role") != "admin":
+        raise HTTPException(403, "仅管理员可设置密码")
+
+    data = await request.json()
+    new_password = data.get("password", "").strip()
+    if len(new_password) < 6:
+        raise HTTPException(400, "密码长度不能少于6位")
+
+    db = database.get_db()
+    try:
+        u = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        if not u:
+            raise HTTPException(404, "账号不存在")
+
+        password_hash = hash_password(new_password)
+        db.execute("UPDATE users SET password_hash=? WHERE username=?", (password_hash, username))
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"设置密码失败: {str(e)}")
+    finally:
+        db.close()
+
+    audit_log(user.get("username", ""), "set_password", "user", username,
+              f"密码由管理员 {user.get('username')} 手动设置")
+
+    return {"ok": True}
+
 # ── My Page (员工个人页面) ──
 @app.get("/api/mypage")
 def get_mypage(user=Depends(get_user)):

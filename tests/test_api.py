@@ -4070,3 +4070,193 @@ async def test_cloud_sync_trigger_not_found(auth_headers):
         r = await ac.post("/api/cloud-sync-configs/NONEXIST/sync",
                           headers=auth_headers, json={})
     assert r.status_code == 404
+
+
+# ── Account Management Enhanced Tests ──
+
+
+@pytest.mark.asyncio
+async def test_update_account_role(auth_headers):
+    """Admin can update an account's role."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # First generate an account for YB-001
+        r = await ac.post("/api/accounts/generate", headers=auth_headers,
+                          json={"employee_id": "YB-001", "role": "worker"})
+        assert r.status_code == 200
+        username = r.json()["username"]
+
+        # Update the role
+        r2 = await ac.put(f"/api/accounts/{username}", headers=auth_headers,
+                          json={"role": "hr"})
+        assert r2.status_code == 200
+        assert r2.json()["ok"] is True
+        assert r2.json()["updated"]["role"] == "hr"
+
+
+@pytest.mark.asyncio
+async def test_update_account_display_name(auth_headers):
+    """Admin can update an account's display name."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/accounts/generate", headers=auth_headers,
+                          json={"employee_id": "YB-001", "role": "worker"})
+        assert r.status_code == 200
+        username = r.json()["username"]
+
+        r2 = await ac.put(f"/api/accounts/{username}", headers=auth_headers,
+                          json={"display_name": "新名字"})
+        assert r2.status_code == 200
+        assert r2.json()["updated"]["display_name"] == "新名字"
+
+
+@pytest.mark.asyncio
+async def test_update_account_invalid_role(auth_headers):
+    """Updating with an invalid role returns 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/accounts/generate", headers=auth_headers,
+                          json={"employee_id": "YB-001", "role": "worker"})
+        assert r.status_code == 200
+        username = r.json()["username"]
+
+        r2 = await ac.put(f"/api/accounts/{username}", headers=auth_headers,
+                          json={"role": "nonexistent_role"})
+        assert r2.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_account_not_found(auth_headers):
+    """Updating a nonexistent account returns 404."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/accounts/NONEXIST", headers=auth_headers,
+                         json={"role": "hr"})
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_account_no_valid_fields(auth_headers):
+    """Updating with no valid fields returns 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/accounts/admin", headers=auth_headers,
+                         json={"invalid_field": "value"})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_account_non_admin_forbidden():
+    """Non-admin users cannot update accounts."""
+    from app import make_token
+    headers = {"Authorization": f"Bearer {make_token('worker1', 'worker')}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.put("/api/accounts/admin", headers=headers,
+                         json={"role": "worker"})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_account(auth_headers):
+    """Admin can delete an account."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Generate account first
+        r = await ac.post("/api/accounts/generate", headers=auth_headers,
+                          json={"employee_id": "YB-001", "role": "worker"})
+        assert r.status_code == 200
+        username = r.json()["username"]
+
+        # Delete it
+        r2 = await ac.delete(f"/api/accounts/{username}", headers=auth_headers)
+        assert r2.status_code == 200
+        assert r2.json()["ok"] is True
+
+        # Verify employee has_account is reset
+        r3 = await ac.get("/api/accounts", headers=auth_headers)
+        yb001 = [a for a in r3.json() if a["id"] == "YB-001"][0]
+        assert yb001["has_account"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_account_self_forbidden(auth_headers):
+    """Admin cannot delete their own account."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.delete("/api/accounts/admin", headers=auth_headers)
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_delete_account_not_found(auth_headers):
+    """Deleting a nonexistent account returns 404."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.delete("/api/accounts/NONEXIST", headers=auth_headers)
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_account_non_admin_forbidden():
+    """Non-admin users cannot delete accounts."""
+    from app import make_token
+    headers = {"Authorization": f"Bearer {make_token('worker1', 'worker')}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.delete("/api/accounts/admin", headers=headers)
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_set_password(auth_headers):
+    """Admin can set a specific password for an account."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        # Generate account
+        r = await ac.post("/api/accounts/generate", headers=auth_headers,
+                          json={"employee_id": "YB-001", "role": "worker"})
+        assert r.status_code == 200
+        username = r.json()["username"]
+
+        # Set password
+        r2 = await ac.post(f"/api/accounts/{username}/set-password",
+                           headers=auth_headers, json={"password": "newpass123"})
+        assert r2.status_code == 200
+        assert r2.json()["ok"] is True
+
+        # Verify login with new password
+        r3 = await ac.post("/api/login", json={"username": username, "password": "newpass123"})
+        assert r3.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_set_password_too_short(auth_headers):
+    """Setting a password shorter than 6 chars returns 400."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/accounts/admin/set-password",
+                          headers=auth_headers, json={"password": "12345"})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_password_not_found(auth_headers):
+    """Setting password for nonexistent account returns 404."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/accounts/NONEXIST/set-password",
+                          headers=auth_headers, json={"password": "newpass123"})
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_set_password_non_admin_forbidden():
+    """Non-admin users cannot set passwords."""
+    from app import make_token
+    headers = {"Authorization": f"Bearer {make_token('worker1', 'worker')}"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/api/accounts/admin/set-password",
+                          headers=headers, json={"password": "newpass123"})
+    assert r.status_code == 403
