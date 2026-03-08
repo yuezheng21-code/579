@@ -824,8 +824,17 @@ def seed_data():
     """
     conn = get_db(); c = conn.cursor()
 
+    # Whitelist of tables that may be checked during seeding
+    _SEED_TABLES = frozenset([
+        "grade_levels", "leave_types", "quotation_templates", "users",
+        "permission_overrides", "warehouses", "warehouse_salary_config",
+        "suppliers", "employees",
+    ])
+
     def _table_empty(table_name):
         """Return True if the given table has zero rows."""
+        if table_name not in _SEED_TABLES:
+            return True
         try:
             return c.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0] == 0
         except Exception:
@@ -1481,10 +1490,11 @@ def auto_backup_before_upgrade() -> str:
     Only creates backup if there is existing data to preserve.
     Checks employees, users, AND timesheet tables — not just employees.
     Returns backup filepath or empty string if no data to backup."""
+    _BACKUP_CHECK_TABLES = ("employees", "users", "timesheet")
     try:
         conn = get_db()
         has_data = False
-        for table in ("employees", "users", "timesheet"):
+        for table in _BACKUP_CHECK_TABLES:
             try:
                 count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 if count > 0:
