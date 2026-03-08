@@ -541,10 +541,12 @@ const MyPage=({t,user})=>{
 };
 
 // ══════ Account Management ══════
-const AccountPage=({t})=>{
+const AccountPage=({t,user:currentUser})=>{
   const[accounts,setAccounts]=useState([]);const[selIds,setSelIds]=useState([]);const[showModal,setShowModal]=useState(null);
+  const[roles,setRoles]=useState([]);const[editAcc,setEditAcc]=useState(null);const[pwdModal,setPwdModal]=useState(null);
+  const isAdmin=currentUser&&currentUser.role==='admin';
   const load=()=>API.get('/api/accounts').then(setAccounts);
-  useEffect(()=>{load()},[]);
+  useEffect(()=>{load();API.get('/api/roles').then(r=>{if(r)setRoles(r)});},[]);
   const generateSingle=async(eid)=>{
     const r=await API.post('/api/accounts/generate',{employee_id:eid,role:'worker'});
     if(r?.ok){
@@ -570,6 +572,25 @@ const AccountPage=({t})=>{
       setShowModal({type:'result',data:[{username,password:r.password,name:''}]});
     }else showToast('重置失败','error');
   };
+  const toggleActive=async(username)=>{
+    const r=await API.put(`/api/accounts/${username}/toggle`);
+    if(r?.ok){showToast(r.active?'账号已启用':'账号已禁用');load();}
+  };
+  const deleteAcc=async(username)=>{
+    if(!confirm(`确定要删除账号 ${username} 吗？此操作不可撤销。`))return;
+    const r=await API.delete(`/api/accounts/${username}`);
+    if(r?.ok){showToast('账号已删除');load();}
+  };
+  const saveEdit=async()=>{
+    if(!editAcc)return;
+    const r=await API.put(`/api/accounts/${editAcc.username}`,{role:editAcc.role,display_name:editAcc.display_name});
+    if(r?.ok){showToast('账号信息已更新');setEditAcc(null);load();}
+  };
+  const savePwd=async()=>{
+    if(!pwdModal||!pwdModal.password)return;
+    const r=await API.post(`/api/accounts/${pwdModal.username}/set-password`,{password:pwdModal.password});
+    if(r?.ok){showToast('密码设置成功');setPwdModal(null);}
+  };
   const toggleAll=(e)=>{
     if(e.target.checked)setSelIds(accounts.map(a=>a.id));
     else setSelIds([]);
@@ -586,7 +607,7 @@ const AccountPage=({t})=>{
       React.createElement('table',null,
         React.createElement('thead',null,React.createElement('tr',null,
           React.createElement('th',null,React.createElement('input',{type:'checkbox',onChange:toggleAll,checked:selIds.length===accounts.length&&accounts.length>0})),
-          ['工号','姓名','职级','仓库','状态','账号','操作'].map(h=>React.createElement('th',{key:h},h)))),
+          ['工号','姓名','职级','仓库','状态','账号','角色','启用','操作'].map(h=>React.createElement('th',{key:h},h)))),
         React.createElement('tbody',null,accounts.map(a=>React.createElement('tr',{key:a.id},
           React.createElement('td',null,React.createElement('input',{type:'checkbox',checked:selIds.includes(a.id),onChange:()=>toggleOne(a.id)})),
           React.createElement('td',null,a.id),React.createElement('td',null,a.name),
@@ -596,9 +617,37 @@ const AccountPage=({t})=>{
           React.createElement('td',null,a.has_account?
             React.createElement('span',{style:{color:'var(--green)'}},a.username):
             React.createElement('span',{style:{color:'var(--text3)'}},'未生成')),
-          React.createElement('td',null,
+          React.createElement('td',null,a.has_account?React.createElement('span',{style:{fontSize:12,color:'var(--text2)'}},
+            (roles.find(r=>r.role===a.role)||{}).label||a.role||'-'):'-'),
+          React.createElement('td',null,a.has_account?React.createElement('span',{style:{color:a.account_active?'var(--green)':'var(--red)',fontWeight:600,fontSize:12}},
+            a.account_active?'✓ 启用':'✗ 禁用'):'-'),
+          React.createElement('td',{style:{whiteSpace:'nowrap'}},
             !a.has_account?React.createElement('button',{className:'btn btn-sm btn-pri',onClick:()=>generateSingle(a.id)},'生成'):
-            React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>resetPwd(a.username)},'重置密码'))))))),
+            React.createElement(React.Fragment,null,
+              React.createElement('button',{className:'btn btn-sm btn-ghost',onClick:()=>resetPwd(a.username)},'重置密码'),
+              isAdmin&&React.createElement('button',{className:'btn btn-sm btn-ghost',style:{marginLeft:4},onClick:()=>setPwdModal({username:a.username,password:''})},'设置密码'),
+              isAdmin&&React.createElement('button',{className:'btn btn-sm btn-ghost',style:{marginLeft:4},onClick:()=>setEditAcc({username:a.username,role:a.role||'worker',display_name:a.name})},'编辑'),
+              isAdmin&&React.createElement('button',{className:'btn btn-sm btn-ghost',style:{marginLeft:4,color:a.account_active?'var(--yellow)':'var(--green)'},onClick:()=>toggleActive(a.username)},a.account_active?'禁用':'启用'),
+              isAdmin&&React.createElement('button',{className:'btn btn-sm btn-ghost',style:{marginLeft:4,color:'var(--red)'},onClick:()=>deleteAcc(a.username)},'删除'))))))))),
+    editAcc&&React.createElement('div',{className:'modal-overlay',onClick:()=>setEditAcc(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,'编辑账号 - ',editAcc.username),
+        React.createElement('label',{style:{display:'block',marginBottom:8}},'显示名',
+          React.createElement('input',{className:'input',value:editAcc.display_name||'',onChange:e=>setEditAcc({...editAcc,display_name:e.target.value})})),
+        React.createElement('label',{style:{display:'block',marginBottom:12}},'角色',
+          React.createElement('select',{className:'input',value:editAcc.role,onChange:e=>setEditAcc({...editAcc,role:e.target.value})},
+            roles.map(r=>React.createElement('option',{key:r.role,value:r.role},r.label+' ('+r.role+')')))),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setEditAcc(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:saveEdit},'保存')))),
+    pwdModal&&React.createElement('div',{className:'modal-overlay',onClick:()=>setPwdModal(null)},
+      React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
+        React.createElement('h3',null,'设置密码 - ',pwdModal.username),
+        React.createElement('label',{style:{display:'block',marginBottom:12}},'新密码（至少6位）',
+          React.createElement('input',{className:'input',type:'text',value:pwdModal.password,placeholder:'输入新密码',onChange:e=>setPwdModal({...pwdModal,password:e.target.value})})),
+        React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'flex-end'}},
+          React.createElement('button',{className:'btn btn-ghost',onClick:()=>setPwdModal(null)},'取消'),
+          React.createElement('button',{className:'btn btn-pri',onClick:savePwd},'确定')))),
     showModal&&React.createElement('div',{className:'modal-overlay',onClick:()=>setShowModal(null)},
       React.createElement('div',{className:'modal',onClick:e=>e.stopPropagation()},
         React.createElement('h3',null,'账号信息'),
