@@ -2008,7 +2008,7 @@ def download_single_file(file_id: str, user=Depends(get_user)):
     f = dict(f)
     if not _can_access_employee_files(user, f["employee_id"]):
         raise HTTPException(403, "无权下载该文件")
-    file_url = f.get("file_url", "")
+    file_url = f.get("file_url") or ""
     if file_url.startswith("/uploads/"):
         file_path = os.path.join(UPLOAD_DIR, file_url.replace("/uploads/", "", 1))
         if os.path.isfile(file_path):
@@ -2034,7 +2034,7 @@ def download_employee_folder(employee_id: str, user=Depends(get_user)):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in files:
             f = dict(f)
-            file_url = f.get("file_url", "")
+            file_url = f.get("file_url") or ""
             if file_url.startswith("/uploads/"):
                 file_path = os.path.join(UPLOAD_DIR, file_url.replace("/uploads/", "", 1))
                 if os.path.isfile(file_path):
