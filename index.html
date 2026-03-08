@@ -146,6 +146,13 @@ tr:hover td{background:rgba(79,110,247,.05)}
     const savedUser = JSON.parse(localStorage.getItem('hr_user'));
     if(savedToken && savedUser && savedUser.username) {
       fallback.style.display = 'none';
+      // Safety: if React/CDN fails to load and render within 5 seconds, re-show fallback login
+      setTimeout(() => {
+        const root = document.getElementById('root');
+        if(!root || !root.children.length) {
+          fallback.style.display = '';
+        }
+      }, 5000);
     }
   } catch(e) { /* ignore localStorage / JSON parse errors */ }
   const langs = [
@@ -303,7 +310,7 @@ const API = {
     if(this.token) opt.headers['Authorization'] = 'Bearer '+this.token;
     if(body) opt.body = JSON.stringify(body);
     const r = await fetch(url,opt);
-    if(r.status===401){if(url!=='/api/login'&&url!=='/api/pin-login'){this.setToken('');localStorage.removeItem('hr_user');window.location.reload();return null}}
+    if(r.status===401){if(url!=='/api/login'&&url!=='/api/pin-login'){this.token='';localStorage.removeItem('hr_token');localStorage.removeItem('hr_user');window.location.reload();return null}}
     const data = await r.json().catch(()=>({}));
     if(!r.ok){showToast(data.detail||'操作失败 / Operation failed','error');return null;}
     return data;

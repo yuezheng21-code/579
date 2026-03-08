@@ -135,7 +135,8 @@ const API = {
     if(body) opt.body = JSON.stringify(body);
     const r = await fetch(url, opt);
     if(r.status === 401){
-      this.setToken('');
+      this.token = '';
+      localStorage.removeItem('hr_token');
       localStorage.removeItem('hr_user');
       window.location.href = '/index.html';
       return null;
