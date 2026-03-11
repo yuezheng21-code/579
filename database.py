@@ -1165,7 +1165,8 @@ def seed_data():
         "client": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,phone,email"},
         "jobseeker": {"employees": "birth_date,id_number,tax_no,tax_id,tax_class,ssn,iban,base_salary,hourly_rate,perf_bonus,extra_bonus,health_insurance,wage_level,settle_method,address,emergency_contact,emergency_phone,work_permit_no,work_permit_expiry,phone,email"},
     }
-    for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
+    if _table_empty("permission_overrides"):
+      for role,(v,cr,ed,dl,ex,ap,im) in role_perm.items():
         scope = role_data_scope.get(role, "all")
         role_hf = role_hidden_fields.get(role, {})
         for mod in ALL_M:
@@ -1364,6 +1365,45 @@ def seed_data():
         VALUES('default','YB','-',13,3,'默认员工ID规则: YB-001','admin')
         ON CONFLICT(id) DO NOTHING""")
 
+    # ── Link demo users to their warehouses, suppliers, and employee records ──
+    # This runs after all tables are seeded, so FK constraints are satisfied.
+    # Uses UPDATE with WHERE to only update rows that exist.
+    user_links = [
+        # (username, warehouse_code, supplier_id, employee_id)
+        ("wh_una", "UNA", None, None),
+        ("wh_dhl", "DHL", None, None),
+        ("sup001", None, "SUP-001", None),
+        ("mgr579", "W579", None, None),
+        ("worker1", "UNA", None, "YB-001"),
+        ("site_mgr1", "UNA", None, None),
+        ("deputy1", "UNA", None, None),
+        ("shift1", "UNA", None, None),
+        ("team1", "UNA", None, None),
+        ("reg_mgr", "UNA", None, None),
+        ("hr", None, None, "YB-011"),
+        ("finance", None, None, "YB-012"),
+    ]
+    for username, wc, sid, eid in user_links:
+        set_parts = []
+        where_parts = []
+        params = []
+        if wc is not None:
+            set_parts.append("warehouse_code=?")
+            where_parts.append("warehouse_code IS NULL")
+            params.append(wc)
+        if sid is not None:
+            set_parts.append("supplier_id=?")
+            where_parts.append("supplier_id IS NULL")
+            params.append(sid)
+        if eid is not None:
+            set_parts.append("employee_id=?")
+            where_parts.append("employee_id IS NULL")
+            params.append(eid)
+        if set_parts:
+            params.append(username)
+            sql = f"UPDATE users SET {','.join(set_parts)} WHERE username=? AND ({' AND '.join(where_parts)})"
+            c.execute(sql, params)
+
     conn.commit(); conn.close()
     print("✅ DB seeded with all modules")
 
@@ -1441,6 +1481,8 @@ def list_backups() -> list:
 
 def restore_database(filename: str) -> dict:
     """Restore critical data from a backup file using INSERT OR REPLACE.
+    Temporarily disables foreign key constraints during restore to prevent
+    ON DELETE SET NULL cascades from wiping FK references when rows are replaced.
     Returns summary of restored rows per table."""
     filepath = os.path.join(BACKUP_DIR, filename)
     if not os.path.exists(filepath):
@@ -1454,6 +1496,10 @@ def restore_database(filename: str) -> dict:
     _backup_tables_set = set(BACKUP_TABLES)
 
     try:
+        # Disable FK constraints to prevent ON DELETE SET NULL cascades
+        # during INSERT OR REPLACE (which is DELETE + INSERT internally).
+        if not USE_POSTGRES:
+            conn.execute("PRAGMA foreign_keys=OFF")
         for table, rows in backup_data.get("tables", {}).items():
             if not rows:
                 continue
@@ -1488,6 +1534,12 @@ def restore_database(filename: str) -> dict:
         conn.rollback()
         raise
     finally:
+        # Re-enable FK constraints after restore
+        if not USE_POSTGRES:
+            try:
+                conn.execute("PRAGMA foreign_keys=ON")
+            except Exception:
+                pass
         conn.close()
     print(f"✅ Database restored from {filename}: {sum(summary.values())} total rows")
     return summary
