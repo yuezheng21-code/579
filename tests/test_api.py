@@ -15,12 +15,15 @@ import database  # noqa: E402
 @pytest.fixture(autouse=True)
 def setup_db():
     """Initialize a fresh test database for each test."""
+    import app as app_module
     # Remove any existing test DB
     if os.path.exists(database.DB_PATH):
         os.remove(database.DB_PATH)
     database.init_db()
     database.seed_data()
     database.ensure_demo_users()
+    # Mark database as ready so the db_ready_middleware doesn't block requests
+    app_module._db_ready = True
     yield
     if os.path.exists(database.DB_PATH):
         os.remove(database.DB_PATH)
@@ -3676,16 +3679,17 @@ async def test_batch_generate_accounts_optimized(auth_headers):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         # Batch generate for multiple seeded employees without accounts
+        # Note: YB-001 is linked to worker1 in seed_data, so use unlinked employees
         r = await ac.post("/api/accounts/batch-generate", headers=auth_headers,
-                          json={"employee_ids": ["YB-001", "YB-002", "YB-003"], "role": "worker"})
+                          json={"employee_ids": ["YB-002", "YB-003", "YB-004"], "role": "worker"})
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True
     assert len(data["accounts"]) == 3
     names = {a["name"] for a in data["accounts"]}
-    assert "张三" in names
     assert "李四" in names
     assert "王五" in names
+    assert "阮氏花" in names
 
 
 @pytest.mark.asyncio
@@ -3693,17 +3697,17 @@ async def test_batch_generate_accounts_skips_existing(auth_headers):
     """Batch account generation should skip employees who already have accounts."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        # First batch
+        # First batch: YB-001 already linked to worker1 in seed, so only YB-002 is new
         r1 = await ac.post("/api/accounts/batch-generate", headers=auth_headers,
-                           json={"employee_ids": ["YB-001", "YB-002"], "role": "worker"})
+                           json={"employee_ids": ["YB-002", "YB-003"], "role": "worker"})
         assert r1.status_code == 200
         assert len(r1.json()["accounts"]) == 2
 
         # Second batch with overlapping IDs - should skip already created
         r2 = await ac.post("/api/accounts/batch-generate", headers=auth_headers,
-                           json={"employee_ids": ["YB-001", "YB-002", "YB-003"], "role": "worker"})
+                           json={"employee_ids": ["YB-002", "YB-003", "YB-004"], "role": "worker"})
         assert r2.status_code == 200
-        assert len(r2.json()["accounts"]) == 1  # Only YB-003 is new
+        assert len(r2.json()["accounts"]) == 1  # Only YB-004 is new
 
 
 @pytest.mark.asyncio
@@ -4080,9 +4084,9 @@ async def test_update_account_role(auth_headers):
     """Admin can update an account's role."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        # First generate an account for YB-001
+        # First generate an account for YB-004 (not YB-001 which is linked to worker1 in seed)
         r = await ac.post("/api/accounts/generate", headers=auth_headers,
-                          json={"employee_id": "YB-001", "role": "worker"})
+                          json={"employee_id": "YB-004", "role": "worker"})
         assert r.status_code == 200
         username = r.json()["username"]
 
@@ -4100,7 +4104,7 @@ async def test_update_account_display_name(auth_headers):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.post("/api/accounts/generate", headers=auth_headers,
-                          json={"employee_id": "YB-001", "role": "worker"})
+                          json={"employee_id": "YB-004", "role": "worker"})
         assert r.status_code == 200
         username = r.json()["username"]
 
@@ -4116,7 +4120,7 @@ async def test_update_account_invalid_role(auth_headers):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.post("/api/accounts/generate", headers=auth_headers,
-                          json={"employee_id": "YB-001", "role": "worker"})
+                          json={"employee_id": "YB-004", "role": "worker"})
         assert r.status_code == 200
         username = r.json()["username"]
 
@@ -4162,9 +4166,9 @@ async def test_delete_account(auth_headers):
     """Admin can delete an account."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        # Generate account first
+        # Generate account first (use YB-004, YB-001 is linked to worker1 in seed)
         r = await ac.post("/api/accounts/generate", headers=auth_headers,
-                          json={"employee_id": "YB-001", "role": "worker"})
+                          json={"employee_id": "YB-004", "role": "worker"})
         assert r.status_code == 200
         username = r.json()["username"]
 
@@ -4175,8 +4179,8 @@ async def test_delete_account(auth_headers):
 
         # Verify employee has_account is reset
         r3 = await ac.get("/api/accounts", headers=auth_headers)
-        yb001 = [a for a in r3.json() if a["id"] == "YB-001"][0]
-        assert yb001["has_account"] == 0
+        yb004 = [a for a in r3.json() if a["id"] == "YB-004"][0]
+        assert yb004["has_account"] == 0
 
 
 @pytest.mark.asyncio
@@ -4213,9 +4217,9 @@ async def test_set_password(auth_headers):
     """Admin can set a specific password for an account."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        # Generate account
+        # Generate account (use YB-004, YB-001 is linked to worker1 in seed)
         r = await ac.post("/api/accounts/generate", headers=auth_headers,
-                          json={"employee_id": "YB-001", "role": "worker"})
+                          json={"employee_id": "YB-004", "role": "worker"})
         assert r.status_code == 200
         username = r.json()["username"]
 

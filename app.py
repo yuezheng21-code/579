@@ -2359,7 +2359,7 @@ ROLE_HIERARCHY = {
 # Role sets for access control — derived from organizational hierarchy
 # Roles with full data access (bypasses grade-based scope)
 FULL_ACCESS_ROLES = frozenset({
-    "admin", "ceo", "ops_director", "mgr",
+    "admin", "ceo", "ops_director",
     "hr", "hr_manager", "hr_assistant", "hr_specialist",
     "fin", "fin_director", "fin_assistant", "fin_specialist",
     "admin_assistant", "admin_specialist"
@@ -2505,7 +2505,9 @@ def _check_grade_data_scope(user: dict) -> str:
     Returns: 'all', 'regional', 'own_warehouse', 'self_only', 'own_supplier'.
     For roles admin/ceo/ops_director/hr/hr_manager/fin/fin_director and other full-access roles,
     always returns 'all' (bypasses grade check).
-    For operational roles, uses grade-based scope if employee_id is linked."""
+    For operational roles, uses grade-based scope if employee_id is linked.
+    When no employee/grade is linked, falls back to the role's configured data_scope
+    from permission_overrides instead of defaulting to 'self_only'."""
     role = user.get("role", "worker")
     if role in FULL_ACCESS_ROLES:
         return "all"
@@ -2521,6 +2523,17 @@ def _check_grade_data_scope(user: dict) -> str:
         return "own_supplier"
     grade = _get_employee_grade(user)
     if not grade:
+        # No linked employee — use the role's configured data_scope from permission_overrides
+        # so that roles like 'mgr' (data_scope='all') don't fall to 'self_only'
+        db = database.get_db()
+        try:
+            perm = db.execute(
+                "SELECT data_scope FROM permission_overrides WHERE role=? LIMIT 1", (role,)
+            ).fetchone()
+            if perm and perm["data_scope"]:
+                return perm["data_scope"]
+        finally:
+            db.close()
         return "self_only"
     gp = _get_grade_permissions(grade)
     return gp["data_scope"]
