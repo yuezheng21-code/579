@@ -2359,8 +2359,7 @@ ROLE_HIERARCHY = {
 # Role sets for access control — derived from organizational hierarchy
 # Roles with full data access (bypasses grade-based scope)
 FULL_ACCESS_ROLES = frozenset({
-    "admin", "ceo", "ops_director",
-    "hr", "hr_manager", "hr_assistant", "hr_specialist",
+    "admin", "ceo", "ops_director", "hr", "hr_manager", "hr_assistant", "hr_specialist",
     "fin", "fin_director", "fin_assistant", "fin_specialist",
     "admin_assistant", "admin_specialist"
 })

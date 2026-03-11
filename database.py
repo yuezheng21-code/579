@@ -1384,20 +1384,25 @@ def seed_data():
         ("finance", None, None, "YB-012"),
     ]
     for username, wc, sid, eid in user_links:
-        parts = []
+        set_parts = []
+        where_parts = []
         params = []
         if wc is not None:
-            parts.append("warehouse_code=?")
+            set_parts.append("warehouse_code=?")
+            where_parts.append("warehouse_code IS NULL")
             params.append(wc)
         if sid is not None:
-            parts.append("supplier_id=?")
+            set_parts.append("supplier_id=?")
+            where_parts.append("supplier_id IS NULL")
             params.append(sid)
         if eid is not None:
-            parts.append("employee_id=?")
+            set_parts.append("employee_id=?")
+            where_parts.append("employee_id IS NULL")
             params.append(eid)
-        if parts:
+        if set_parts:
             params.append(username)
-            c.execute(f"UPDATE users SET {','.join(parts)} WHERE username=? AND ({' AND '.join(p.split('=')[0] + ' IS NULL' for p in parts)})", params)
+            sql = f"UPDATE users SET {','.join(set_parts)} WHERE username=? AND ({' AND '.join(where_parts)})"
+            c.execute(sql, params)
 
     conn.commit(); conn.close()
     print("✅ DB seeded with all modules")
