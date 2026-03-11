@@ -139,27 +139,27 @@ tr:hover td{background:rgba(79,110,247,.05)}
 </div>
 <div id="root"></div>
 <script>
+// Portal configuration shared by fallback login and React LoginPage
+var __portalInfo = {
+  client:   {icon:'👤',title:'客户登录',subtitle:'客户查询与服务'},
+  supplier: {icon:'🏭',title:'供应商登录',subtitle:'供应商协同管理'},
+  worker:   {icon:'💼',title:'员工登录',subtitle:'员工办公与考勤'},
+  jobseeker:{icon:'📝',title:'求职者登录',subtitle:'求职与招聘信息'}
+};
+var __portalParam = new URLSearchParams(window.location.search).get('portal');
+var __activePortal = __portalParam && __portalInfo[__portalParam] ? __portalInfo[__portalParam] : null;
 (() => {
   const fallback = document.getElementById('login-fallback');
   if(!fallback) return;
-  // Portal detection from URL query parameter
-  const _urlParams = new URLSearchParams(window.location.search);
-  const _portal = _urlParams.get('portal');
-  const _portalInfo = {
-    client:   {icon:'👤',title:'客户登录',subtitle:'客户查询与服务'},
-    supplier: {icon:'🏭',title:'供应商登录',subtitle:'供应商协同管理'},
-    worker:   {icon:'💼',title:'员工登录',subtitle:'员工办公与考勤'},
-    jobseeker:{icon:'📝',title:'求职者登录',subtitle:'求职与招聘信息'}
-  };
-  if(_portal && _portalInfo[_portal]){
-    const pi = _portalInfo[_portal];
+  // Apply portal context to fallback login
+  if(__activePortal){
     const iconEl = document.getElementById('fallback-portal-icon');
     const titleEl = document.getElementById('fallback-title');
     const subtitleEl = document.getElementById('fallback-subtitle');
     const backEl = document.getElementById('fallback-back');
-    if(iconEl){iconEl.textContent=pi.icon;iconEl.style.display='block';}
-    if(titleEl) titleEl.textContent=pi.title;
-    if(subtitleEl) subtitleEl.textContent=pi.subtitle;
+    if(iconEl){iconEl.textContent=__activePortal.icon;iconEl.style.display='block';}
+    if(titleEl) titleEl.textContent=__activePortal.title;
+    if(subtitleEl) subtitleEl.textContent=__activePortal.subtitle;
     if(backEl) backEl.style.display='block';
   }
   // If the user is already logged in, hide fallback immediately so it does not block the system page
@@ -372,16 +372,6 @@ const gradeColor=(g)=>{
   return c[g]||'var(--pri)';
 };
 
-// ══════ Portal info for role-based entrances ══════
-const PORTAL_INFO = {
-  client:   {icon:'👤',title:'客户登录',subtitle:'客户查询与服务'},
-  supplier: {icon:'🏭',title:'供应商登录',subtitle:'供应商协同管理'},
-  worker:   {icon:'💼',title:'员工登录',subtitle:'员工办公与考勤'},
-  jobseeker:{icon:'📝',title:'求职者登录',subtitle:'求职与招聘信息'}
-};
-const _portalParam = new URLSearchParams(window.location.search).get('portal');
-const _activePortal = _portalParam && PORTAL_INFO[_portalParam] ? PORTAL_INFO[_portalParam] : null;
-
 // ══════ Login Page (Optimized - No default credentials shown) ══════
 const LoginPage=({onLogin,lang,setLang})=>{
   const [u,setU]=useState('');const[p,setP]=useState('');const[err,setErr]=useState('');const[loading,setLoading]=useState(false);
@@ -398,9 +388,9 @@ const LoginPage=({onLogin,lang,setLang})=>{
   };
   return React.createElement('div',{className:'login-page'},
     React.createElement('div',{className:'card fade login-card'},
-      _activePortal&&React.createElement('div',{style:{fontSize:40,marginBottom:4}},_activePortal.icon),
-      React.createElement('div',{style:{fontSize:28,fontWeight:700,color:'var(--pri)',marginBottom:4}},_activePortal?_activePortal.title:'渊博579'),
-      React.createElement('div',{style:{fontSize:13,color:'var(--text2)',marginBottom:20}},_activePortal?_activePortal.subtitle:'HR Management System V6'),
+      __activePortal&&React.createElement('div',{style:{fontSize:40,marginBottom:4}},__activePortal.icon),
+      React.createElement('div',{style:{fontSize:28,fontWeight:700,color:'var(--pri)',marginBottom:4}},__activePortal?__activePortal.title:'渊博579'),
+      React.createElement('div',{style:{fontSize:13,color:'var(--text2)',marginBottom:20}},__activePortal?__activePortal.subtitle:'HR Management System V6'),
       React.createElement('div',{style:{display:'flex',justifyContent:'center',gap:6,marginBottom:16}},
         LANGS.map(l=>React.createElement('span',{key:l.c,onClick:()=>setLang(l.c),
           style:{cursor:'pointer',padding:'3px 8px',borderRadius:4,fontSize:12,
@@ -418,7 +408,7 @@ const LoginPage=({onLogin,lang,setLang})=>{
       React.createElement('button',{className:'btn btn-pri',onClick:submit,disabled:loading,style:{width:'100%',padding:10,fontSize:15}},
         loading?'登录中...':t.login),
       React.createElement('div',{style:{marginTop:16,fontSize:11,color:'var(--text3)'}},'用户名密码需要联系管理员赋予'),
-      _activePortal&&React.createElement('div',{style:{marginTop:12}},
+      __activePortal&&React.createElement('div',{style:{marginTop:12}},
         React.createElement('a',{href:'/home.html',style:{color:'var(--pri)',fontSize:13,textDecoration:'none'}},'← 返回首页'))
     ));
 };
