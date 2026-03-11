@@ -71,6 +71,18 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+@app.middleware("http")
+async def db_ready_middleware(request: Request, call_next):
+    """Block API requests while database is still initializing.
+    Static files and health checks are always allowed."""
+    path = request.url.path
+    if not _db_ready and path.startswith("/api/") and path != "/api/health":
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "数据库正在初始化，请稍后再试 (Database initializing, please retry)"},
+        )
+    return await call_next(request)
+
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -2264,9 +2276,10 @@ def dashboard(user=Depends(get_user)):
             }
             return r
 
-        # Warehouse-scoped dashboard
-        if role == "wh" and user.get("warehouse_code"):
-            wh = user["warehouse_code"]
+        # Warehouse-scoped dashboard: applies to wh role and other warehouse-scoped roles
+        scope = _check_grade_data_scope(user)
+        wh = user.get("warehouse_code") or _get_employee_warehouse(user)
+        if scope == "own_warehouse" and wh:
             # Combine total/own/supplier employee counts into a single query
             src_counts = db.execute(
                 "SELECT source, COUNT(*) c FROM employees WHERE status='在职' AND (primary_wh=? OR dispatch_whs LIKE ?) GROUP BY source",
@@ -2346,7 +2359,8 @@ ROLE_HIERARCHY = {
 # Role sets for access control — derived from organizational hierarchy
 # Roles with full data access (bypasses grade-based scope)
 FULL_ACCESS_ROLES = frozenset({
-    "admin", "ceo", "ops_director", "hr", "hr_manager", "hr_assistant", "hr_specialist",
+    "admin", "ceo", "ops_director", "mgr",
+    "hr", "hr_manager", "hr_assistant", "hr_specialist",
     "fin", "fin_director", "fin_assistant", "fin_specialist",
     "admin_assistant", "admin_specialist"
 })
